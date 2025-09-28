@@ -2,6 +2,8 @@
 Google Sheets API Credentials Setup Helper
 
 This script helps you set up authentication for Google Sheets API.
+Following copilot instructions for cross-platform compatibility and proper logging.
+
 You have two options:
 1. Service Account (recommended for server applications)
 2. OAuth 2.0 (for user applications)
@@ -15,38 +17,56 @@ Before running this script:
 
 import os
 import json
+import logging
 from pathlib import Path
+from typing import Dict, Any
+from dotenv import load_dotenv
 
-def setup_service_account():
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def setup_service_account() -> None:
     """
     Setup instructions for Service Account authentication
-    """
-    print("\n=== SERVICE ACCOUNT SETUP ===")
-    print("1. Go to Google Cloud Console: https://console.cloud.google.com")
-    print("2. Select your project or create a new one")
-    print("3. Go to 'APIs & Services' > 'Credentials'")
-    print("4. Click 'Create Credentials' > 'Service Account'")
-    print("5. Fill in the service account details")
-    print("6. Go to the created service account and create a JSON key")
-    print("7. Download the JSON file and place it in this project folder")
-    print("8. Rename it to 'service_account.json'")
-    print("9. Share your Google Sheet with the service account email")
-    print("   (found in the JSON file as 'client_email')")
     
-    # Check if service account file exists
-    service_account_path = Path("service_account.json")
+    Following copilot instructions for proper logging and cross-platform paths.
+    """
+    logger.info("=== SERVICE ACCOUNT SETUP ===")
+    logger.info("1. Go to Google Cloud Console: https://console.cloud.google.com")
+    logger.info("2. Select your project or create a new one")
+    logger.info("3. Go to 'APIs & Services' > 'Credentials'")
+    logger.info("4. Click 'Create Credentials' > 'Service Account'")
+    logger.info("5. Fill in the service account details")
+    logger.info("6. Go to the created service account and create a JSON key")
+    logger.info("7. Download the JSON file and place it in this project folder")
+    logger.info("8. Rename it to 'service_account.json'")
+    logger.info("9. Share your Google Sheet with the service account email")
+    logger.info("   (found in the JSON file as 'client_email')")
+    
+    # Check if service account file exists using cross-platform path
+    service_account_filename = os.getenv('SERVICE_ACCOUNT_FILE', 'service_account.json')
+    service_account_path = Path(os.path.join(os.getcwd(), service_account_filename))
+    
     if service_account_path.exists():
-        print(f"\n✅ Found service account file: {service_account_path}")
+        logger.info(f"✅ Found service account file: {service_account_path}")
         try:
-            with open(service_account_path, 'r') as f:
-                creds = json.load(f)
-                print(f"📧 Service account email: {creds.get('client_email', 'Not found')}")
-                print("\nMake sure to share your Google Sheet with this email address!")
+            with open(service_account_path, 'r', encoding='utf-8') as f:
+                creds: Dict[str, Any] = json.load(f)
+                client_email = creds.get('client_email', 'Not found')
+                logger.info(f"📧 Service account email: {client_email}")
+                logger.info("Make sure to share your Google Sheet with this email address!")
         except Exception as e:
-            print(f"❌ Error reading service account file: {e}")
+            logger.error(f"Error reading service account file: {e}")
     else:
-        print(f"\n❌ Service account file not found: {service_account_path}")
-        print("Please download and place your service account JSON file here.")
+        logger.warning(f"Service account file not found: {service_account_path}")
+        logger.info("Please download and place your service account JSON file here.")
 
 def setup_oauth():
     """

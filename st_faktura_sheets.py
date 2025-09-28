@@ -3,28 +3,54 @@ Example usage of Google Sheets Client for ST_Faktura Project
 
 This script demonstrates how to read from and write to your specific Google Sheet:
 https://docs.google.com/spreadsheets/d/170onDFFCveCzV6Q9F1_IhsG2LBRcw5MYxJbyocVJmq0/edit?gid=0#gid=0
+
+Following the copilot instructions for cross-platform compatibility, proper logging,
+and clean architecture patterns.
 """
 
-from google_sheets_client import GoogleSheetsClient, extract_spreadsheet_id
-import pandas as pd
+import os
+import logging
+from typing import Tuple, Optional
 from datetime import datetime
+
+import pandas as pd
+from dotenv import load_dotenv
+
+from google_sheets_client import GoogleSheetsClient, SheetsConfig, extract_spreadsheet_id
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging for this script
+logging.basicConfig(
+    level=getattr(logging, os.getenv('LOG_LEVEL', 'INFO')),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Your Google Sheet URL
 SHEET_URL = "https://docs.google.com/spreadsheets/d/170onDFFCveCzV6Q9F1_IhsG2LBRcw5MYxJbyocVJmq0/edit?gid=0#gid=0"
 SPREADSHEET_ID = extract_spreadsheet_id(SHEET_URL)
 
-def main():
-    """Main function demonstrating Google Sheets operations"""
+def main() -> None:
+    """
+    Main function demonstrating Google Sheets operations
     
-    print("ST_Faktura Google Sheets Integration")
-    print("===================================")
-    print(f"Working with sheet: {SHEET_URL}")
-    print(f"Spreadsheet ID: {SPREADSHEET_ID}")
+    This function follows the copilot instructions for proper error handling,
+    logging, and clean architecture patterns.
+    """
+    
+    logger.info("ST_Faktura Google Sheets Integration")
+    logger.info("===================================")
+    logger.info(f"Working with sheet: {SHEET_URL}")
+    logger.info(f"Spreadsheet ID: {SPREADSHEET_ID}")
     
     try:
-        # Initialize the client (you can choose "service_account" or "oauth")
-        print("\n1. Initializing Google Sheets client...")
-        client = GoogleSheetsClient(auth_method="service_account")  # Change to "oauth" if needed
+        # Initialize configuration and client
+        logger.info("1. Initializing Google Sheets client...")
+        config = SheetsConfig()
+        auth_method = os.getenv('AUTH_METHOD', 'service_account')
+        client = GoogleSheetsClient(auth_method=auth_method, config=config)
         
         # Get sheet information
         print("\n2. Getting sheet information...")

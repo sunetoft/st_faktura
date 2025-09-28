@@ -2,15 +2,22 @@
 
 This project provides a Python interface to read from and write to Google Sheets for the ST_Faktura application.
 
+**Developed following copilot instructions for cross-platform compatibility, clean architecture, proper logging, and deployment readiness.**
+
 ## 📋 Features
 
+- ✅ **Cross-platform compatibility** (Windows, Linux, macOS)
+- ✅ **Proper logging** with configurable levels and file output
+- ✅ **Environment-based configuration** using .env files
+- ✅ **Type hints** and Pythonic patterns throughout
+- ✅ **Clean architecture** with separation of concerns
 - ✅ Read data from Google Sheets
 - ✅ Write data to Google Sheets
 - ✅ Append new rows to sheets
 - ✅ Clear sheet ranges
 - ✅ Pandas DataFrame integration
 - ✅ Support for both Service Account and OAuth authentication
-- ✅ Easy-to-use Python classes and methods
+- ✅ **AWS EC2 + Nginx deployment ready**
 
 ## 🚀 Quick Start
 
@@ -22,8 +29,22 @@ The required packages are already installed in your virtual environment:
 - `google-auth-oauthlib`
 - `google-auth-httplib2`
 - `pandas`
+- `python-dotenv`
 
-### 2. Set Up Authentication
+### 2. Configure Environment
+
+Create your environment configuration:
+
+```bash
+# Copy the example environment file
+cp .env.example .env
+
+# Edit the .env file with your preferences
+# nano .env  # On Linux/macOS
+# notepad .env  # On Windows
+```
+
+### 3. Set Up Authentication
 
 Run the setup script to configure authentication:
 
@@ -32,7 +53,7 @@ python setup_credentials.py
 ```
 
 Choose between:
-- **Service Account** (recommended for automated scripts)
+- **Service Account** (recommended for automated scripts and server deployments)
 - **OAuth 2.0** (for user-interactive applications)
 
 ### 3. Configure Google Cloud Console
