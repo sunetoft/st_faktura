@@ -1,23 +1,104 @@
-# ST_Faktura Google Sheets Integration
+# ST_Faktura - Complete Invoice Management System
 
-This project provides a Python interface to read from and write to Google Sheets for the ST_Faktura application.
+This project provides a comprehensive invoice management system with Google Sheets integration for the ST_Faktura application.
 
 **Developed following copilot instructions for cross-platform compatibility, clean architecture, proper logging, and deployment readiness.**
 
+## 🎯 System Overview
+
+ST_Faktura is a complete invoice management solution that includes:
+- **Customer Management** - Add and manage customer information
+- **Task Tracking** - Record billable tasks and time
+- **Invoice Generation** - Create professional PDF invoices
+- **Email Integration** - Send invoices directly to customers
+- **Google Sheets Integration** - All data synchronized with Google Sheets
+
 ## 📋 Features
 
+### Core Invoice Management
+- ✅ **Customer Management** - Add, store, and manage customer details
+- ✅ **Task Creation** - Record billable tasks with time tracking
+- ✅ **Professional PDF Invoices** - Generate invoices with consecutive numbering
+- ✅ **Email Integration** - Send invoices directly to customers
+- ✅ **Company Details Management** - Configure your business information
+
+### Technical Features  
 - ✅ **Cross-platform compatibility** (Windows, Linux, macOS)
 - ✅ **Proper logging** with configurable levels and file output
 - ✅ **Environment-based configuration** using .env files
 - ✅ **Type hints** and Pythonic patterns throughout
 - ✅ **Clean architecture** with separation of concerns
-- ✅ Read data from Google Sheets
-- ✅ Write data to Google Sheets
-- ✅ Append new rows to sheets
-- ✅ Clear sheet ranges
-- ✅ Pandas DataFrame integration
-- ✅ Support for both Service Account and OAuth authentication
+- ✅ **Google Sheets API integration** for data storage
+- ✅ **PDF generation** with ReportLab
 - ✅ **AWS EC2 + Nginx deployment ready**
+
+## 🚀 Scripts Overview
+
+### 1. CreateCustomer.py
+Creates new customers and stores them in Google Sheets.
+
+**Usage:**
+```bash
+python CreateCustomer.py
+```
+
+**Collects:**
+- Customer ID, Company Name, Address, CVR
+- Zip Code, Town, Phone, Email
+
+### 2. CreateTask.py  
+Creates billable tasks associated with customers.
+
+**Usage:**
+```bash
+python CreateTask.py
+```
+
+**Features:**
+- Select customer from existing customers
+- Choose task type from predefined types
+- Add task description and time (minutes)
+- Automatic date stamping
+
+### 3. CreateInvoice.py
+Generates professional PDF invoices from tasks.
+
+**Usage:**
+```bash
+python CreateInvoice.py
+```
+
+**Features:**
+- Select customer and their tasks
+- Calculate total time and amount
+- Generate PDF with consecutive numbering (starts from 785)
+- Email invoice to customer automatically
+- 8-day payment terms
+
+### 4. Tool_MyCompanyDetails.py
+Manages your company information for invoices.
+
+**Usage:**
+```bash
+python Tool_MyCompanyDetails.py
+```
+
+**Configures:**
+- Company details (name, address, CVR, etc.)
+- Banking information (IBAN, SWIFT, account details)
+
+## 📊 Google Sheets Integration
+
+The system uses three Google Sheets:
+
+1. **Customers Sheet** (gid=0)
+   - Customer ID, Company Name, Address, CVR, Zip, Town, Phone, Email
+
+2. **Task Types Sheet** (gid=288943747)  
+   - Predefined task types for selection
+
+3. **Tasks Sheet** (gid=1276274497)
+   - Date, Customer Name, Task Type, Description, Time (Minutes)
 
 ## 🚀 Quick Start
 
