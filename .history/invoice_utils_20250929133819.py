@@ -267,17 +267,14 @@ class InvoicePDFGenerator:
 
     def _create_new_header(self, invoice_number: int, invoice_date: datetime, company_details: Dict[str, str], customer_details: Dict[str, str]) -> Table:
         # Unified content width based on left/right page margins (2cm each) => usable width ~ (A4 width - 4cm)
-        total_content_width = CONTENT_WIDTH
-        # Allocate a fixed right column width for the meta/logo block; remaining width for customer block
-        right_col_width = 6.5 * cm  # Fixed width ensures consistent alignment with items table
+    total_content_width = CONTENT_WIDTH
+        # We allocate a fixed right column width for the meta block; remaining for customer block
+    right_col_width = 6.5*cm  # Keep meta/logo column fixed
         left_col_width = total_content_width - right_col_width
 
-        # Build customer block (filter out empty lines) with bold company/customer name (first line)
-        raw_name = customer_details.get('name', '')
-        name_line = f"<b>{raw_name}</b>" if raw_name else ''
         customer_block_lines = [
-            name_line,
-            customer_details.get('address', ''),
+            customer_details.get('name',''),
+            customer_details.get('address',''),
             f"{customer_details.get('zip','')} {customer_details.get('town','')}".strip()
         ]
         customer_block = '<br/>'.join([l for l in customer_block_lines if l])
@@ -287,27 +284,28 @@ class InvoicePDFGenerator:
         brand_block_flowables = []
         if os.path.exists(logo_path):
             try:
+                # Approximate previous text block height; scale width preserving aspect ratio after fixed height
                 img = Image(logo_path)
                 target_height = 40  # doubled (100% bigger) per request
                 aspect = img.imageWidth / float(img.imageHeight) if img.imageHeight else 1.0
                 img.drawHeight = target_height
                 img.drawWidth = target_height * aspect
                 brand_block_flowables.append(img)
-            except Exception:
+            except Exception as _e:
                 logo_text = company_details.get('company_name', 'ST Digital')
                 brand_block_flowables.append(Paragraph(f"<font size='20'><b>{logo_text}</b></font>", self.styles['CompanyDetails']))
         else:
             logo_text = company_details.get('company_name', 'ST Digital')
             brand_block_flowables.append(Paragraph(f"<font size='20'><b>{logo_text}</b></font>", self.styles['CompanyDetails']))
 
-        # Add meta info (date + number)
+        # Add meta info below the logo / brand
         meta_html = (
-            f"<para alignment='right'>Fakturadato: {invoice_date.strftime('%d.%m.%Y')}<br/>"
-            f"Fakturanr.: {invoice_number}</para>"
+            f"Fakturadato: {invoice_date.strftime('%d.%m.%Y')}<br/>"
+            f"Fakturanr.: {invoice_number}"
         )
         brand_block_flowables.append(Paragraph(meta_html, self.styles['InvoiceInfo']))
 
-        # Nested table on right for brand + meta, right aligned
+        # Use nested table on right to keep logo + info top aligned and right aligned
         from reportlab.platypus import Table as RLTable
         right_table = RLTable([[f] for f in brand_block_flowables], colWidths=[right_col_width])
         right_table.setStyle(TableStyle([
@@ -324,6 +322,7 @@ class InvoicePDFGenerator:
         table.setStyle(TableStyle([
             ('VALIGN', (0,0), (-1,-1), 'TOP'),
             ('ALIGN', (1,0), (1,0), 'RIGHT'),
+            # Remove any implicit padding to tighten alignment to content box
             ('LEFTPADDING', (0,0), (-1,-1), 0),
             ('RIGHTPADDING', (0,0), (-1,-1), 0),
             ('TOPPADDING', (0,0), (-1,-1), 0),
@@ -332,7 +331,7 @@ class InvoicePDFGenerator:
         return table
 
     def _create_new_items_table(self, tasks: List[Dict[str, str]], company_details: Dict[str, str]) -> Table:
-        headers = ['Tasktype', 'Task description', 'Min. forbrugt', 'Pris', 'Discount %', 'Sum']
+        headers = ['Tasktype', 'Task description', 'Min. forbrugt', 'Price', 'Discount %', 'Sum']
         data = [headers]
         subtotal = 0.0
         for t in tasks:
@@ -359,10 +358,10 @@ class InvoicePDFGenerator:
         total = subtotal + moms
         data.append(['', '', '', '', 'Moms (25%)', f"{moms:.2f}"])
         data.append(['', '', '', '', 'Samlet pris', f"{total:.2f}"])
-        # Column width proportions originally based on 18cm total; rescale to CONTENT_WIDTH
-        fractions = [0.1667, 0.3333, 0.1222, 0.1222, 0.1222, 0.1334]  # sum ~ 1.0
-        col_widths = [CONTENT_WIDTH * f for f in fractions]
-        table = Table(data, colWidths=col_widths)
+    # Column width proportions originally based on 18cm total; rescale to CONTENT_WIDTH
+    fractions = [0.1667, 0.3333, 0.1222, 0.1222, 0.1222, 0.1334]  # sum ~ 1.0
+    col_widths = [CONTENT_WIDTH * f for f in fractions]
+    table = Table(data, colWidths=col_widths)
         table.setStyle(TableStyle([
             ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
             ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
@@ -422,15 +421,15 @@ Fakturanr. <b>{invoice_number}</b> bedes anført ved bankoverførsel<br/><br/>
         payment_data = [
             [Paragraph(payment_info, self.styles['CompanyDetails'])]
         ]
-        # Use unified CONTENT_WIDTH for payment section to align with other elements
-        payment_table = Table(payment_data, colWidths=[CONTENT_WIDTH])
+        
+        payment_table = Table(payment_data, colWidths=[16*cm])
         payment_table.setStyle(TableStyle([
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ('FONTSIZE', (0, 0), (-1, -1), 9),
             ('TOPPADDING', (0, 0), (-1, -1), 20),
         ]))
-
+        
         return payment_table
     
     def _draw_page_elements(self, canvas, doc, company_details: Dict[str, str]) -> None:

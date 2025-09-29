@@ -12,95 +12,94 @@ Following copilot instructions for cross-platform compatibility, proper logging,
 
 import os
 import json
-import logging
-import sys
-import smtplib
-from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
-from typing import Dict, List, Optional, Tuple
-from dotenv import load_dotenv
-
-from google_sheets_client import GoogleSheetsClient, SheetsConfig, extract_spreadsheet_id
-from invoice_utils import InvoiceNumberManager, InvoicePDFGenerator
-
-# Load environment variables
-load_dotenv()
-
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, os.getenv('LOG_LEVEL', 'INFO')),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('st_faktura_invoices.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# Spreadsheet configuration
-SPREADSHEET_ID = "170onDFFCveCzV6Q9F1_IhsG2LBRcw5MYxJbyocVJmq0"
-CUSTOMER_SHEET_RANGE = "Kunder!A:I"  # Customer sheet (including hourly rate)
-TASKS_SHEET_RANGE = "Opgave!A:I"  # Extended tasks sheet with pricing, discount, sum
-COMPANY_DETAILS_SHEET_RANGE = "Company Details!A2:L2"  # Single company details row (after headers)
-
-# Company details file
-COMPANY_DETAILS_FILE = os.path.join(os.getcwd(), 'st-faktura.json')
-INVOICED_TASKS_FILE = os.path.join(os.getcwd(), 'invoiced_tasks.json')
-BOOKKEEPING_EMAIL = os.getenv('BOOKKEEPING_EMAIL', 'indtaegt@ebogholderen.dk')
-
-
-class InvoiceManager:
-    """
-    Manages invoice operations following clean architecture principles
-    """
-    
-    def __init__(self, sheets_client: GoogleSheetsClient):
+    def send_invoice_email(
+        self,
+        customer_email: str,
+        pdf_path: str,
+        customer_name: str,
+        invoice_number: int
+    ) -> bool:
         """
-        Initialize invoice manager
-        
-        Args:
-            sheets_client: Configured Google Sheets client
-        """
-        self.sheets_client = sheets_client
-        self.spreadsheet_id = SPREADSHEET_ID
-        self.invoice_number_manager = InvoiceNumberManager()
-        self.pdf_generator = InvoicePDFGenerator()
-        
-    def get_customers(self) -> List[Dict[str, str]]:
-        """
-        Retrieve all customers from the customer spreadsheet
-        
-        Returns:
-            List of customer dictionaries
+        Send invoice via email
         """
         try:
-            logger.info("Retrieving customers from spreadsheet")
-            customers_data = self.sheets_client.read_sheet(self.spreadsheet_id, CUSTOMER_SHEET_RANGE)
-            
-            customers = []
-            
-            # Skip header row and process customer data
-            if customers_data and len(customers_data) > 1:
-                for row in customers_data[1:]:
-                    if row and len(row) >= 2:  # At least ID and name
-                        customer = {
-                            'id': row[0] if len(row) > 0 else '',
-                            'name': row[1] if len(row) > 1 else '',
-                            'address': row[2] if len(row) > 2 else '',
-                            'cvr': row[3] if len(row) > 3 else '',
-                            'zip': row[4] if len(row) > 4 else '',
-                            'town': row[5] if len(row) > 5 else '',
-                            'phone': row[6] if len(row) > 6 else '',
-                            'email': row[7] if len(row) > 7 else '',
-                            'hourly_rate': float(row[8]) if len(row) > 8 and row[8] else 500.0
-                        }
-                        customers.append(customer)
-            
-            logger.info(f"Found {len(customers)} customers")
-            return customers
+            # Email configuration from environment variables
+            smtp_server = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
+            smtp_port = int(os.getenv('SMTP_PORT', '587'))
+            sender_email = os.getenv('SENDER_EMAIL', '')
+            auth_method = os.getenv('EMAIL_AUTH_METHOD', 'password').lower()
+            sender_password = os.getenv('SENDER_PASSWORD', '') if auth_method == 'password' else ''
+
+            if not sender_email:
+                logger.error("SENDER_EMAIL not configured in environment variables")
+                return False
+
+            access_token = None
+            if auth_method == 'oauth':
+                try:
+                    from gmail_oauth import get_gmail_access_token
+                    access_token = get_gmail_access_token(sender_email)
+                    if not access_token:
+                        logger.error("Failed to obtain Gmail OAuth access token")
+                        return False
+                except ImportError:
+                    logger.error("gmail_oauth module not found. Cannot use OAuth method.")
+                    return False
+            elif auth_method == 'password':
+                if not sender_password:
+                    logger.error("SENDER_PASSWORD missing for password auth.")
+                    return False
+            else:
+                logger.error(f"Unknown EMAIL_AUTH_METHOD '{auth_method}'.")
+                return False
+
+            # Create message
+            msg = MIMEMultipart()
+            msg['From'] = sender_email
+            msg['To'] = customer_email
+            msg['Subject'] = f"Faktura #{invoice_number} - ST_Faktura"
+
+            # Email body
+            body = f"""
+Kære {customer_name},
+
+Vedhæftet finder du faktura #{invoice_number}.
+
+Betalingsfristen er 8 dage fra fakturadato.
+
+Med venlig hilsen,
+ST_Faktura
+"""
+            msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+            # Attach PDF
+            with open(pdf_path, 'rb') as f:
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(f.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename={os.path.basename(pdf_path)}')
+            msg.attach(part)
+
+            # Send email
+            server = smtplib.SMTP(smtp_server, smtp_port)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            if auth_method == 'oauth':
+                import base64
+                auth_string = f"user={sender_email}\x01auth=Bearer {access_token}\x01\x01".encode('utf-8')
+                server.docmd('AUTH', 'XOAUTH2 ' + base64.b64encode(auth_string).decode('utf-8'))
+            else:
+                server.login(sender_email, sender_password)
+            server.sendmail(sender_email, customer_email, msg.as_string())
+            server.quit()
+
+            logger.info(f"Invoice email sent to {customer_email}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to send invoice email: {e}")
+            return False
             
         except Exception as e:
             logger.error(f"Failed to retrieve customers: {e}")
@@ -317,14 +316,13 @@ class InvoiceManager:
             else:
                 logger.error(f"Unknown EMAIL_AUTH_METHOD '{auth_method}'. Use 'password' or 'oauth'.")
                 return False
-            
+
             # Create message
             msg = MIMEMultipart()
             msg['From'] = sender_email
             msg['To'] = customer_email
-            # Updated branding: use 'ST Digital'
-            msg['Subject'] = f"Faktura #{invoice_number} - ST Digital"
-            
+            msg['Subject'] = f"Faktura #{invoice_number} - ST_Faktura"
+
             # Email body
             body = f"""
 Kære {customer_name},
@@ -336,21 +334,16 @@ Betalingsfristen er 8 dage fra fakturadato.
 Med venlig hilsen,
 ST_Faktura
 """
-            
             msg.attach(MIMEText(body, 'plain', 'utf-8'))
-            
+
             # Attach PDF
-            with open(pdf_path, "rb") as attachment:
+            with open(pdf_path, 'rb') as f:
                 part = MIMEBase('application', 'octet-stream')
-                part.set_payload(attachment.read())
-            
+                part.set_payload(f.read())
             encoders.encode_base64(part)
-            part.add_header(
-                'Content-Disposition',
-                f'attachment; filename= faktura_{invoice_number}.pdf'
-            )
+            part.add_header('Content-Disposition', f'attachment; filename={os.path.basename(pdf_path)}')
             msg.attach(part)
-            
+
             # Send email
             server = smtplib.SMTP(smtp_server, smtp_port)
             server.ehlo()
@@ -363,8 +356,7 @@ ST_Faktura
                 server.docmd('AUTH', 'XOAUTH2 ' + base64.b64encode(auth_string).decode('utf-8'))
             else:
                 server.login(sender_email, sender_password)
-            text = msg.as_string()
-            server.sendmail(sender_email, customer_email, text)
+            server.sendmail(sender_email, customer_email, msg.as_string())
             server.quit()
             
             logger.info(f"Invoice email sent to {customer_email}")
@@ -628,96 +620,6 @@ def record_invoiced_tasks(tasks: List[Dict[str, str]], invoice_number: int) -> N
     _save_invoiced_tasks(invoiced)
     logger.info(f"Recorded {len(tasks)} tasks as invoiced (invoice #{invoice_number})")
 
-def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
-    """Upload a file to Google Drive or a Shared Drive folder.
-
-    Shared Drive handling:
-      - If GOOGLE_DRIVE_SHARED_DRIVE_ID is set, all operations use that Shared Drive (driveId, corpora='drive').
-      - Folder search/creation and file upload always pass supportsAllDrives/includeItemsFromAllDrives when a shared drive is used.
-    """
-    try:
-        from google.oauth2 import service_account
-        from googleapiclient.errors import HttpError
-        from googleapiclient.discovery import build
-        from googleapiclient.http import MediaFileUpload
-
-        shared_drive_id = os.getenv('GOOGLE_DRIVE_SHARED_DRIVE_ID', '').strip() or None
-        keyfile = os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE', 'service_account.json')
-        SCOPES = ['https://www.googleapis.com/auth/drive.file']
-        creds = service_account.Credentials.from_service_account_file(keyfile, scopes=SCOPES)
-        drive_service = build('drive', 'v3', credentials=creds, cache_discovery=False)
-
-        def list_folders():
-            if shared_drive_id:
-                return drive_service.files().list(
-                    q=("name='{0}' and mimeType='application/vnd.google-apps.folder' and trashed=false".format(folder_name)),
-                    corpora='drive',
-                    driveId=shared_drive_id,
-                    includeItemsFromAllDrives=True,
-                    supportsAllDrives=True,
-                    fields='files(id)'
-                ).execute().get('files', [])
-            else:
-                return drive_service.files().list(
-                    q=("name='{0}' and mimeType='application/vnd.google-apps.folder' and trashed=false".format(folder_name)),
-                    spaces='drive',
-                    fields='files(id)'
-                ).execute().get('files', [])
-
-        folders = list_folders()
-        if folders:
-            folder_id = folders[0]['id']
-        else:
-            meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
-            if shared_drive_id:
-                # For creation in a Shared Drive, parent must be the shared drive root (supply parents=[shared_drive_id])
-                meta['parents'] = [shared_drive_id]
-            folder = drive_service.files().create(
-                body=meta,
-                fields='id',
-                supportsAllDrives=bool(shared_drive_id)
-            ).execute()
-            folder_id = folder.get('id')
-            logger.info(f"Created folder '{folder_name}' (id={folder_id}) in {'Shared Drive' if shared_drive_id else 'My Drive'}")
-
-        file_meta = {'name': os.path.basename(file_path), 'parents': [folder_id]}
-        media = MediaFileUpload(file_path, mimetype='application/pdf')
-        drive_service.files().create(
-            body=file_meta,
-            media_body=media,
-            fields='id',
-            supportsAllDrives=bool(shared_drive_id)
-        ).execute()
-        logger.info(f"Uploaded '{os.path.basename(file_path)}' to folder '{folder_name}' ({'Shared Drive' if shared_drive_id else 'My Drive'})")
-
-    except HttpError as e:
-        status = getattr(e, 'resp', {}).status if hasattr(e, 'resp') else 'unknown'
-        reason = ''
-        try:
-            if hasattr(e, 'error_details') and e.error_details:
-                reason = e.error_details[0].get('reason', '')
-        except Exception:
-            pass
-        if status == 403 or reason in ('storageQuotaExceeded', 'teamDriveFileLimitExceeded'):
-            msg = (
-                "Could not upload invoice to Google Drive using a service account.\n"
-                "- If you intended a Shared Drive: set GOOGLE_DRIVE_SHARED_DRIVE_ID and add the service account as a member.\n"
-                "- Otherwise switch to OAuth user credentials (AUTH_METHOD=oauth)."
-            )
-            print(f"ERROR: {msg}")
-            logger.error(msg.replace('Could not upload', 'ERROR: Could not upload'))
-        elif status == 404 or reason == 'notFound':
-            msg = (
-                f"Shared Drive not found or inaccessible (ID={shared_drive_id}).\n"
-                "- Verify the ID (it's from the URL of the shared drive).\n"
-                "- Ensure the service account has at least Content Manager access."
-            )
-            print(f"ERROR: {msg}")
-            logger.error(msg.replace('Shared Drive not found', 'ERROR: Shared Drive not found'))
-        else:
-            logger.error(f"Drive upload failed (HTTP {status}) reason={reason}: {e}")
-    except Exception as e:
-        logger.error(f"Failed to upload to Drive: {e}")
 
 
 def Credit_memo() -> bool:
@@ -819,63 +721,42 @@ def main() -> None:
             hourly_rate * (-1 if credit_memo else 1),
             credit_memo=credit_memo
         )
-        
         if not pdf_path:
             print("❌ Failed to generate invoice PDF")
             sys.exit(1)
-        
+        # Invoice generated successfully
         print(f"✅ Invoice PDF generated: {pdf_path}")
-        # Save a copy to Google Drive
-        upload_to_drive(pdf_path)
-        # Extract invoice number to record tasks
+        # Record invoiced tasks
         import re
         match = re.search(r'faktura_(\d+)_', pdf_path)
         generated_invoice_number = int(match.group(1)) if match else None
         if generated_invoice_number is not None:
             record_invoiced_tasks(selected_tasks, generated_invoice_number)
-        
-        # Step 5: Send email (optional)
+        # Step 5: Send email to customer
         if selected_customer['email']:
             send_email = input(f"\nSend invoice to {selected_customer['email']}? (y/N): ").strip().lower()
-            
             if send_email == 'y':
-                # Extract invoice number from filename or use the one we just generated
-                import re
-                match = re.search(r'faktura_(\d+)_', pdf_path)
-                current_invoice_number = int(match.group(1)) if match else 785
-                
+                current_invoice_number = generated_invoice_number or 0
                 if invoice_manager.send_invoice_email(
-                    selected_customer['email'], 
-                    pdf_path, 
-                    selected_customer['name'], 
+                    selected_customer['email'],
+                    pdf_path,
+                    selected_customer['name'],
                     current_invoice_number
                 ):
                     print(f"✅ Invoice sent to {selected_customer['email']}")
                 else:
                     print("❌ Failed to send invoice email")
-
-        # Step 6: Offer sending bookkeeping copy
-        try:
-            if BOOKKEEPING_EMAIL:
-                copy_choice = input(f"\nSend a copy to bookkeeping ({BOOKKEEPING_EMAIL})? (y/N): ").strip().lower()
-                if copy_choice == 'y':
-                    # reuse invoice number gathered above
-                    if 'generated_invoice_number' not in locals() or generated_invoice_number is None:
-                        import re
-                        match_copy = re.search(r'faktura_(\d+)_', pdf_path)
-                        generated_invoice_number = int(match_copy.group(1)) if match_copy else 0
-                    if invoice_manager.send_invoice_email(
-                        BOOKKEEPING_EMAIL,
-                        pdf_path,
-                        selected_customer['name'],
-                        generated_invoice_number
-                    ):
-                        print(f"✅ Copy sent to {BOOKKEEPING_EMAIL}")
-                    else:
-                        print(f"❌ Failed to send copy to {BOOKKEEPING_EMAIL}")
-        except Exception as e:
-            logger.error(f"Error sending bookkeeping copy: {e}")
-        
+        # Step 6: Always send copy to Sune
+        copy_email = 'sune@stdigital.dk'
+        if invoice_manager.send_invoice_email(
+            copy_email,
+            pdf_path,
+            selected_customer['name'],
+            generated_invoice_number or 0
+        ):
+            print(f"✅ Copy sent to {copy_email}")
+        else:
+            print(f"❌ Failed to send copy to {copy_email}")
         print(f"\n🎉 Invoice creation completed successfully!")
         logger.info(f"Invoice creation completed for customer: {selected_customer['name']}")
     

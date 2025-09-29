@@ -18,5 +18,9 @@
   "ST Digital|2025-09-28|Support|HourlyPrice|support 1|180|2250.0|25.0|1687.5": {
     "invoice_number": 801,
     "date": "2025-09-29 02:32:55"
+  },
+  "Galleri Toft|2025-09-29|Support|HourlyPrice|Testing 3|90|1125.0|0.0|1125.0": {
+    "invoice_number": 808,
+    "date": "2025-09-29 13:45:13"
   }
 }

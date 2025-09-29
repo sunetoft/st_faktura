@@ -272,11 +272,9 @@ class InvoicePDFGenerator:
         right_col_width = 6.5 * cm  # Fixed width ensures consistent alignment with items table
         left_col_width = total_content_width - right_col_width
 
-        # Build customer block (filter out empty lines) with bold company/customer name (first line)
-        raw_name = customer_details.get('name', '')
-        name_line = f"<b>{raw_name}</b>" if raw_name else ''
+        # Build customer block (filter out empty lines)
         customer_block_lines = [
-            name_line,
+            customer_details.get('name', ''),
             customer_details.get('address', ''),
             f"{customer_details.get('zip','')} {customer_details.get('town','')}".strip()
         ]
@@ -302,8 +300,8 @@ class InvoicePDFGenerator:
 
         # Add meta info (date + number)
         meta_html = (
-            f"<para alignment='right'>Fakturadato: {invoice_date.strftime('%d.%m.%Y')}<br/>"
-            f"Fakturanr.: {invoice_number}</para>"
+            f"Fakturadato: {invoice_date.strftime('%d.%m.%Y')}<br/>"
+            f"Fakturanr.: {invoice_number}"
         )
         brand_block_flowables.append(Paragraph(meta_html, self.styles['InvoiceInfo']))
 
@@ -332,7 +330,7 @@ class InvoicePDFGenerator:
         return table
 
     def _create_new_items_table(self, tasks: List[Dict[str, str]], company_details: Dict[str, str]) -> Table:
-        headers = ['Tasktype', 'Task description', 'Min. forbrugt', 'Pris', 'Discount %', 'Sum']
+        headers = ['Tasktype', 'Task description', 'Min. forbrugt', 'Price', 'Discount %', 'Sum']
         data = [headers]
         subtotal = 0.0
         for t in tasks:
@@ -422,15 +420,16 @@ Fakturanr. <b>{invoice_number}</b> bedes anført ved bankoverførsel<br/><br/>
         payment_data = [
             [Paragraph(payment_info, self.styles['CompanyDetails'])]
         ]
-        # Use unified CONTENT_WIDTH for payment section to align with other elements
-        payment_table = Table(payment_data, colWidths=[CONTENT_WIDTH])
+        
+    # Use unified CONTENT_WIDTH for payment section to align with other elements
+    payment_table = Table(payment_data, colWidths=[CONTENT_WIDTH])
         payment_table.setStyle(TableStyle([
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ('FONTSIZE', (0, 0), (-1, -1), 9),
             ('TOPPADDING', (0, 0), (-1, -1), 20),
         ]))
-
+        
         return payment_table
     
     def _draw_page_elements(self, canvas, doc, company_details: Dict[str, str]) -> None:

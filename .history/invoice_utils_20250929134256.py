@@ -332,7 +332,7 @@ class InvoicePDFGenerator:
         return table
 
     def _create_new_items_table(self, tasks: List[Dict[str, str]], company_details: Dict[str, str]) -> Table:
-        headers = ['Tasktype', 'Task description', 'Min. forbrugt', 'Pris', 'Discount %', 'Sum']
+    headers = ['Tasktype', 'Task description', 'Min. forbrugt', 'Pris', 'Discount %', 'Sum']
         data = [headers]
         subtotal = 0.0
         for t in tasks:

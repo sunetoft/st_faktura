@@ -18,10 +18,6 @@ from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 
-# Unified content width (page width minus left/right margins: 2cm each)
-CONTENT_SIDE_MARGIN = 2.0 * cm
-CONTENT_WIDTH = A4[0] - (CONTENT_SIDE_MARGIN * 2)
-
 logger = logging.getLogger(__name__)
 
 # Invoice configuration
@@ -236,23 +232,12 @@ class InvoicePDFGenerator:
             )
             story = []
             story.append(self._create_new_header(invoice_number, invoice_date, company_details, customer_details))
-            # Thin horizontal rule under header
-            from reportlab.platypus import Table as RLTable
-            rule_table = RLTable([[" "]], colWidths=[CONTENT_WIDTH], rowHeights=[2])
-            rule_table.setStyle(TableStyle([
-                ('LINEBELOW', (0,0), (-1,0), 0.5, colors.black),
-                ('LEFTPADDING', (0,0), (-1,-1), 0),
-                ('RIGHTPADDING', (0,0), (-1,-1), 0),
-                ('TOPPADDING', (0,0), (-1,-1), 0),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 0),
-            ]))
-            story.append(rule_table)
-            story.append(Spacer(1, 16))  # Slightly larger gap after rule
+            story.append(Spacer(1, 20))
             # Insert title above items table: 'Faktura' or 'Kreditnota'
             from reportlab.platypus import Paragraph
             title_text = "Kreditnota" if credit_memo else "Faktura"
             story.append(Paragraph(f"<para alignment='left'><b>{title_text}</b></para>", self.styles['InvoiceInfo']))
-            story.append(Spacer(1, 18))  # More space between title and items table per request
+            story.append(Spacer(1, 10))
             story.append(self._create_new_items_table(tasks, company_details))
             story.append(Spacer(1, 25))
             story.append(self._create_payment_section(company_details, invoice_date, invoice_number))
@@ -267,63 +252,34 @@ class InvoicePDFGenerator:
 
     def _create_new_header(self, invoice_number: int, invoice_date: datetime, company_details: Dict[str, str], customer_details: Dict[str, str]) -> Table:
         # Unified content width based on left/right page margins (2cm each) => usable width ~ (A4 width - 4cm)
-        total_content_width = CONTENT_WIDTH
-        # Allocate a fixed right column width for the meta/logo block; remaining width for customer block
-        right_col_width = 6.5 * cm  # Fixed width ensures consistent alignment with items table
+        total_content_width = A4[0] - (4.0*cm)
+        # We allocate a fixed right column width for the meta block; remaining for customer block
+        right_col_width = 6.5*cm
         left_col_width = total_content_width - right_col_width
 
-        # Build customer block (filter out empty lines) with bold company/customer name (first line)
-        raw_name = customer_details.get('name', '')
-        name_line = f"<b>{raw_name}</b>" if raw_name else ''
         customer_block_lines = [
-            name_line,
-            customer_details.get('address', ''),
+            customer_details.get('name',''),
+            customer_details.get('address',''),
             f"{customer_details.get('zip','')} {customer_details.get('town','')}".strip()
         ]
         customer_block = '<br/>'.join([l for l in customer_block_lines if l])
 
-        # Attempt to load logo.gif; if not present fallback to text brand
-        logo_path = os.path.join(os.getcwd(), 'logo.gif')
-        brand_block_flowables = []
-        if os.path.exists(logo_path):
-            try:
-                img = Image(logo_path)
-                target_height = 40  # doubled (100% bigger) per request
-                aspect = img.imageWidth / float(img.imageHeight) if img.imageHeight else 1.0
-                img.drawHeight = target_height
-                img.drawWidth = target_height * aspect
-                brand_block_flowables.append(img)
-            except Exception:
-                logo_text = company_details.get('company_name', 'ST Digital')
-                brand_block_flowables.append(Paragraph(f"<font size='20'><b>{logo_text}</b></font>", self.styles['CompanyDetails']))
-        else:
-            logo_text = company_details.get('company_name', 'ST Digital')
-            brand_block_flowables.append(Paragraph(f"<font size='20'><b>{logo_text}</b></font>", self.styles['CompanyDetails']))
-
-        # Add meta info (date + number)
-        meta_html = (
-            f"<para alignment='right'>Fakturadato: {invoice_date.strftime('%d.%m.%Y')}<br/>"
+        logo_text = company_details.get('company_name', 'ST Digital')
+        header_info = (
+            f"<para align='right'><font size='20'><b>{logo_text}</b></font><br/>"
+            f"Fakturadato: {invoice_date.strftime('%d.%m.%Y')}<br/>"
             f"Fakturanr.: {invoice_number}</para>"
         )
-        brand_block_flowables.append(Paragraph(meta_html, self.styles['InvoiceInfo']))
 
-        # Nested table on right for brand + meta, right aligned
-        from reportlab.platypus import Table as RLTable
-        right_table = RLTable([[f] for f in brand_block_flowables], colWidths=[right_col_width])
-        right_table.setStyle(TableStyle([
-            ('ALIGN', (0,0), (-1,-1), 'RIGHT'),
-            ('VALIGN', (0,0), (-1,-1), 'TOP'),
-            ('LEFTPADDING', (0,0), (-1,-1), 0),
-            ('RIGHTPADDING', (0,0), (-1,-1), 0),
-            ('TOPPADDING', (0,0), (-1,-1), 0),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 0),
-        ]))
-
-        row = [Paragraph(customer_block, self.styles['CompanyDetails']), right_table]
+        row = [
+            Paragraph(customer_block, self.styles['CompanyDetails']),
+            Paragraph(header_info, self.styles['InvoiceInfo'])
+        ]
         table = Table([row], colWidths=[left_col_width, right_col_width])
         table.setStyle(TableStyle([
             ('VALIGN', (0,0), (-1,-1), 'TOP'),
             ('ALIGN', (1,0), (1,0), 'RIGHT'),
+            # Remove any implicit padding to tighten alignment to content box
             ('LEFTPADDING', (0,0), (-1,-1), 0),
             ('RIGHTPADDING', (0,0), (-1,-1), 0),
             ('TOPPADDING', (0,0), (-1,-1), 0),
@@ -332,7 +288,7 @@ class InvoicePDFGenerator:
         return table
 
     def _create_new_items_table(self, tasks: List[Dict[str, str]], company_details: Dict[str, str]) -> Table:
-        headers = ['Tasktype', 'Task description', 'Min. forbrugt', 'Pris', 'Discount %', 'Sum']
+        headers = ['Tasktype', 'Task description', 'Min. forbrugt', 'Price', 'Discount %', 'Sum']
         data = [headers]
         subtotal = 0.0
         for t in tasks:
@@ -359,10 +315,7 @@ class InvoicePDFGenerator:
         total = subtotal + moms
         data.append(['', '', '', '', 'Moms (25%)', f"{moms:.2f}"])
         data.append(['', '', '', '', 'Samlet pris', f"{total:.2f}"])
-        # Column width proportions originally based on 18cm total; rescale to CONTENT_WIDTH
-        fractions = [0.1667, 0.3333, 0.1222, 0.1222, 0.1222, 0.1334]  # sum ~ 1.0
-        col_widths = [CONTENT_WIDTH * f for f in fractions]
-        table = Table(data, colWidths=col_widths)
+        table = Table(data, colWidths=[3*cm, 6*cm, 2.2*cm, 2.2*cm, 2.2*cm, 2.4*cm])
         table.setStyle(TableStyle([
             ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
             ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
@@ -422,15 +375,15 @@ Fakturanr. <b>{invoice_number}</b> bedes anført ved bankoverførsel<br/><br/>
         payment_data = [
             [Paragraph(payment_info, self.styles['CompanyDetails'])]
         ]
-        # Use unified CONTENT_WIDTH for payment section to align with other elements
-        payment_table = Table(payment_data, colWidths=[CONTENT_WIDTH])
+        
+        payment_table = Table(payment_data, colWidths=[16*cm])
         payment_table.setStyle(TableStyle([
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ('FONTSIZE', (0, 0), (-1, -1), 9),
             ('TOPPADDING', (0, 0), (-1, -1), 20),
         ]))
-
+        
         return payment_table
     
     def _draw_page_elements(self, canvas, doc, company_details: Dict[str, str]) -> None:

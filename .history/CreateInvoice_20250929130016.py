@@ -322,8 +322,7 @@ class InvoiceManager:
             msg = MIMEMultipart()
             msg['From'] = sender_email
             msg['To'] = customer_email
-            # Updated branding: use 'ST Digital'
-            msg['Subject'] = f"Faktura #{invoice_number} - ST Digital"
+            msg['Subject'] = f"Faktura #{invoice_number} - ST_Faktura"
             
             # Email body
             body = f"""

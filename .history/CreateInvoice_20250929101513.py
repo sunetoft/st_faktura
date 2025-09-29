@@ -322,8 +322,7 @@ class InvoiceManager:
             msg = MIMEMultipart()
             msg['From'] = sender_email
             msg['To'] = customer_email
-            # Updated branding: use 'ST Digital'
-            msg['Subject'] = f"Faktura #{invoice_number} - ST Digital"
+            msg['Subject'] = f"Faktura #{invoice_number} - ST_Faktura"
             
             # Email body
             body = f"""
@@ -628,96 +627,6 @@ def record_invoiced_tasks(tasks: List[Dict[str, str]], invoice_number: int) -> N
     _save_invoiced_tasks(invoiced)
     logger.info(f"Recorded {len(tasks)} tasks as invoiced (invoice #{invoice_number})")
 
-def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
-    """Upload a file to Google Drive or a Shared Drive folder.
-
-    Shared Drive handling:
-      - If GOOGLE_DRIVE_SHARED_DRIVE_ID is set, all operations use that Shared Drive (driveId, corpora='drive').
-      - Folder search/creation and file upload always pass supportsAllDrives/includeItemsFromAllDrives when a shared drive is used.
-    """
-    try:
-        from google.oauth2 import service_account
-        from googleapiclient.errors import HttpError
-        from googleapiclient.discovery import build
-        from googleapiclient.http import MediaFileUpload
-
-        shared_drive_id = os.getenv('GOOGLE_DRIVE_SHARED_DRIVE_ID', '').strip() or None
-        keyfile = os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE', 'service_account.json')
-        SCOPES = ['https://www.googleapis.com/auth/drive.file']
-        creds = service_account.Credentials.from_service_account_file(keyfile, scopes=SCOPES)
-        drive_service = build('drive', 'v3', credentials=creds, cache_discovery=False)
-
-        def list_folders():
-            if shared_drive_id:
-                return drive_service.files().list(
-                    q=("name='{0}' and mimeType='application/vnd.google-apps.folder' and trashed=false".format(folder_name)),
-                    corpora='drive',
-                    driveId=shared_drive_id,
-                    includeItemsFromAllDrives=True,
-                    supportsAllDrives=True,
-                    fields='files(id)'
-                ).execute().get('files', [])
-            else:
-                return drive_service.files().list(
-                    q=("name='{0}' and mimeType='application/vnd.google-apps.folder' and trashed=false".format(folder_name)),
-                    spaces='drive',
-                    fields='files(id)'
-                ).execute().get('files', [])
-
-        folders = list_folders()
-        if folders:
-            folder_id = folders[0]['id']
-        else:
-            meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
-            if shared_drive_id:
-                # For creation in a Shared Drive, parent must be the shared drive root (supply parents=[shared_drive_id])
-                meta['parents'] = [shared_drive_id]
-            folder = drive_service.files().create(
-                body=meta,
-                fields='id',
-                supportsAllDrives=bool(shared_drive_id)
-            ).execute()
-            folder_id = folder.get('id')
-            logger.info(f"Created folder '{folder_name}' (id={folder_id}) in {'Shared Drive' if shared_drive_id else 'My Drive'}")
-
-        file_meta = {'name': os.path.basename(file_path), 'parents': [folder_id]}
-        media = MediaFileUpload(file_path, mimetype='application/pdf')
-        drive_service.files().create(
-            body=file_meta,
-            media_body=media,
-            fields='id',
-            supportsAllDrives=bool(shared_drive_id)
-        ).execute()
-        logger.info(f"Uploaded '{os.path.basename(file_path)}' to folder '{folder_name}' ({'Shared Drive' if shared_drive_id else 'My Drive'})")
-
-    except HttpError as e:
-        status = getattr(e, 'resp', {}).status if hasattr(e, 'resp') else 'unknown'
-        reason = ''
-        try:
-            if hasattr(e, 'error_details') and e.error_details:
-                reason = e.error_details[0].get('reason', '')
-        except Exception:
-            pass
-        if status == 403 or reason in ('storageQuotaExceeded', 'teamDriveFileLimitExceeded'):
-            msg = (
-                "Could not upload invoice to Google Drive using a service account.\n"
-                "- If you intended a Shared Drive: set GOOGLE_DRIVE_SHARED_DRIVE_ID and add the service account as a member.\n"
-                "- Otherwise switch to OAuth user credentials (AUTH_METHOD=oauth)."
-            )
-            print(f"ERROR: {msg}")
-            logger.error(msg.replace('Could not upload', 'ERROR: Could not upload'))
-        elif status == 404 or reason == 'notFound':
-            msg = (
-                f"Shared Drive not found or inaccessible (ID={shared_drive_id}).\n"
-                "- Verify the ID (it's from the URL of the shared drive).\n"
-                "- Ensure the service account has at least Content Manager access."
-            )
-            print(f"ERROR: {msg}")
-            logger.error(msg.replace('Shared Drive not found', 'ERROR: Shared Drive not found'))
-        else:
-            logger.error(f"Drive upload failed (HTTP {status}) reason={reason}: {e}")
-    except Exception as e:
-        logger.error(f"Failed to upload to Drive: {e}")
 
 
 def Credit_memo() -> bool:
@@ -824,9 +733,7 @@ def main() -> None:
             print("❌ Failed to generate invoice PDF")
             sys.exit(1)
         
-        print(f"✅ Invoice PDF generated: {pdf_path}")
-        # Save a copy to Google Drive
-        upload_to_drive(pdf_path)
+    print(f"✅ Invoice PDF generated: {pdf_path}")
         # Extract invoice number to record tasks
         import re
         match = re.search(r'faktura_(\d+)_', pdf_path)
