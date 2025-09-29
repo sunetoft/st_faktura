@@ -74,4 +74,4 @@ logs/
 
 # Temporary files
 *.tmp
-*.temp
+*.temp\n# Local history and generated artifacts\n.history/\ninvoices/*.pdf\n
