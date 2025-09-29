@@ -1,4 +1,4 @@
-7"""
+"""
 ST_Faktura Task Management Script
 
 This script allows users to create new tasks by selecting customers and task types,
@@ -617,7 +617,6 @@ def display_task_summary(task_data: Dict[str, str]) -> None:
     
     print(f"Price:            {task_data['calculated_price']} DKK")
     print(f"Discount:         {task_data['discount_percentage']}%")
-    print(f"Final Sum:        {task_data['final_sum']} DKK")
     print("="*60)
 
 
@@ -750,9 +749,6 @@ def main() -> None:
                     print(f"Hourly Rate: {hourly_rate} DKK/hour")
                 
                 print(f"Total Price: {calculated_price} DKK")
-                if discount_percentage > 0:
-                    print(f"Discount: {discount_percentage}%")
-                    print(f"Final Sum: {final_sum} DKK")
                 logger.info(f"Task creation completed for customer: {selected_customer['name']}")
             else:
                 print(f"\n❌ Failed to add task. Please check the logs for details.")

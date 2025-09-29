@@ -13,7 +13,6 @@ import logging
 import sys
 from typing import Dict, Optional
 from dotenv import load_dotenv
-from google_sheets_client import GoogleSheetsClient
 
 # Load environment variables
 load_dotenv()
@@ -32,10 +31,6 @@ logger = logging.getLogger(__name__)
 # Company details file path (cross-platform)
 COMPANY_DETAILS_FILE = os.path.join(os.getcwd(), 'st-faktura.json')
 
-# Google Sheets configuration
-SPREADSHEET_ID = "170onDFFCveCzV6Q9F1_IhsG2LBRcw5MYxJbyocVJmq0"
-COMPANY_SHEET_RANGE = "Company Details!A:N"  # Assuming columns A-N for all company data
-
 
 class CompanyDetailsManager:
     """
@@ -50,8 +45,6 @@ class CompanyDetailsManager:
             config_file: Path to the company details configuration file
         """
         self.config_file = config_file
-        self.sheets_client = GoogleSheetsClient()
-        self.spreadsheet_id = SPREADSHEET_ID
         
     def load_company_details(self) -> Optional[Dict[str, str]]:
         """
@@ -129,91 +122,6 @@ class CompanyDetailsManager:
             errors.append("Invalid email format")
         
         return errors
-    
-    def save_to_google_sheets(self, company_details: Dict[str, str]) -> bool:
-        """
-        Save company details to Google Sheets
-        
-        Args:
-            company_details: Dictionary containing company information
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            logger.info("Saving company details to Google Sheets")
-            
-            # Set up headers if needed
-            self.setup_company_sheet_headers()
-            
-            # Prepare company data row
-            company_row = [
-                company_details['company_name'],
-                company_details['company_address'],
-                company_details['company_cvr'],
-                company_details['company_zip'],
-                company_details['company_town'],
-                company_details['company_phone'],
-                company_details['company_email'],
-                company_details['bank_name'],
-                company_details['bank_account'],
-                company_details['iban'],
-                company_details['swift'],
-                company_details.get('additional_info', '')
-            ]
-            
-            # Check if company already exists and update, or append new
-            existing_data = self.sheets_client.read_sheet(self.spreadsheet_id, COMPANY_SHEET_RANGE)
-            
-            if existing_data and len(existing_data) > 1:
-                # Update existing row (assume row 2 is the data row)
-                logger.info("Updating existing company details in sheet")
-                self.sheets_client.write_sheet(
-                    self.spreadsheet_id,
-                    "Company Details!A2:L2",
-                    [company_row]
-                )
-            else:
-                # Append new row
-                logger.info("Adding new company details to sheet")
-                self.sheets_client.append_to_sheet(
-                    self.spreadsheet_id,
-                    COMPANY_SHEET_RANGE,
-                    [company_row]
-                )
-            
-            logger.info("Company details saved to Google Sheets successfully")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to save company details to Google Sheets: {e}")
-            return False
-    
-    def setup_company_sheet_headers(self) -> None:
-        """
-        Set up the company sheet headers if they don't exist
-        """
-        try:
-            logger.info("Checking company sheet headers")
-            existing_data = self.sheets_client.read_sheet(self.spreadsheet_id, COMPANY_SHEET_RANGE)
-            
-            headers = [
-                "Company Name", "Address", "CVR", "Zip Code", "Town", "Phone", 
-                "Email", "Bank Name", "Bank Account", "IBAN", "SWIFT", "Additional Information"
-            ]
-            
-            # If no data or headers don't match, set them up
-            if not existing_data or len(existing_data[0]) != len(headers):
-                logger.info("Setting up company sheet headers")
-                self.sheets_client.write_sheet(
-                    self.spreadsheet_id,
-                    "Company Details!A1:L1",
-                    [headers]
-                )
-                logger.info("Company headers added successfully")
-                
-        except Exception as e:
-            logger.error(f"Failed to setup company headers: {e}")
 
 
 def get_user_input(prompt: str, current_value: str = "", required: bool = True) -> str:
@@ -310,12 +218,6 @@ def collect_company_details(existing_details: Optional[Dict[str, str]] = None) -
         "SWIFT Code", current.get('swift', '')
     )
     
-    # Additional information
-    print("\n--- Additional Information ---")
-    company_details['additional_info'] = get_user_input(
-        "Additional Information", current.get('additional_info', ''), required=False
-    )
-    
     return company_details
 
 
@@ -343,9 +245,6 @@ def display_company_summary(company_details: Dict[str, str]) -> None:
     print(f"Bank Account:     {company_details['bank_account']}")
     print(f"IBAN:             {company_details['iban']}")
     print(f"SWIFT:            {company_details['swift']}")
-    
-    print("\n--- Additional Information ---")
-    print(f"Additional Info:  {company_details.get('additional_info', 'N/A')}")
     print("="*60)
 
 
@@ -388,20 +287,11 @@ def main() -> None:
         confirm = input("\nDo you want to save these company details? (y/N): ").strip().lower()
         
         if confirm == 'y':
-            # Save company details to both local file and Google Sheets
-            local_saved = company_manager.save_company_details(company_details)
-            sheets_saved = company_manager.save_to_google_sheets(company_details)
-            
-            if local_saved and sheets_saved:
+            # Save company details
+            if company_manager.save_company_details(company_details):
                 print(f"\n✅ Company details saved successfully!")
                 print(f"File location: {COMPANY_DETAILS_FILE}")
-                print(f"Google Sheets: Updated successfully")
                 logger.info("Company details management completed successfully")
-            elif local_saved:
-                print(f"\n⚠️ Company details saved to local file but failed to save to Google Sheets.")
-                print(f"File location: {COMPANY_DETAILS_FILE}")
-                print(f"Please check the logs for Google Sheets error details.")
-                logger.warning("Company details saved locally but not to Google Sheets")
             else:
                 print(f"\n❌ Failed to save company details. Please check the logs for details.")
                 sys.exit(1)

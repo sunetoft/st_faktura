@@ -287,44 +287,23 @@ Fakturanr.: {invoice_number}"""
         ]))
         return table
     
-    def _create_payment_section(self, company_details: Dict[str, str], invoice_date: datetime, invoice_number: int) -> Table:
-        """Create payment terms and banking information section
-
-        Priority for payment terms days:
-        1. company_details['payment_terms_days'] if set and valid int
-        2. ENV PAYMENT_TERMS_DAYS
-        3. Fallback 8
-        """
-        # Determine payment terms days
-        import os
-        payment_terms_days = 8
-        # From company details
-        raw_ct = company_details.get('payment_terms_days') if company_details else None
-        if raw_ct:
-            try:
-                payment_terms_days = int(str(raw_ct).strip())
-            except ValueError:
-                pass
-        else:
-            # From environment
-            env_days = os.getenv('PAYMENT_TERMS_DAYS')
-            if env_days:
-                try:
-                    payment_terms_days = int(env_days.strip())
-                except ValueError:
-                    pass
-
-        due_date = invoice_date + timedelta(days=payment_terms_days)
+    def _create_payment_section(self, company_details: Dict[str, str], invoice_date: datetime) -> Table:
+        """Create payment terms and banking information section"""
+        due_date = invoice_date + timedelta(days=8)
+        
+        # Payment terms (matching template format)
         bank_name = company_details.get('bank_name', '') or 'Bank'
         bank_account = company_details.get('bank_account', '') or ''
         regnr = ''
+        # Try to parse regnr if embedded like "6506 / 3061152279"
         if bank_account and '/' in bank_account:
             parts = [p.strip() for p in bank_account.split('/')]
-            if len(parts) == 2 and parts[0].replace(' ', '').isdigit():
+            if len(parts) == 2 and parts[0].isdigit():
                 regnr = parts[0]
-        payment_info = f"""<b>Betalingsbetingelser:</b> Netto {payment_terms_days} dage - forfalden {due_date.strftime('%d.%m.%Y')}<br/>
+        invoice_number_placeholder = "{INVOICE_NUMBER}"  # Replaced later if needed
+        payment_info = f"""<b>Betalingsbetingelser:</b> Netto 8 dage - forfalden {due_date.strftime('%d.%m.%Y')}<br/>
 Beløbet indbetales til vor bank. <b>{bank_name}</b>{f' - Regnr.: <b>{regnr}</b>' if regnr else ''}{f' / Kontonr.: <b>{bank_account}</b>' if bank_account else ''}<br/>
-Fakturanr. <b>{invoice_number}</b> bedes anført ved bankoverførsel<br/><br/>
+Fakturanr. <b>{invoice_number_placeholder}</b> bedes anført ved bankoverførsel<br/><br/>
 <i>Ved for sen betaling påregnes rente i henhold til gældende lovgivning.</i>"""
         
         # Create payment section

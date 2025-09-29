@@ -669,34 +669,22 @@ def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
         logger.info(f"Uploaded invoice to Google Drive folder '{folder_name}'")
     except HttpError as e:
         # Handle Drive API HTTP errors
-        status = e.resp.status
-        # Attempt to extract the error reason
+        reason = ''
         try:
             details = e.error_details[0]
             reason = details.get('reason', '')
         except Exception:
             reason = ''
-        if status == 403 or reason == 'storageQuotaExceeded':
+        if e.resp.status == 403 or reason == 'storageQuotaExceeded':
             msg = (
-                "Could not upload invoice to Google Drive: service account has no personal My Drive quota.\n"
-                "- To use a Shared Drive, set the env var GOOGLE_DRIVE_SHARED_DRIVE_ID to its ID.\n"
-                "- Or switch to OAuth user credentials (using EMAIL_AUTH_METHOD=oauth)."
+                "❌ Could not upload invoice to Google Drive: service account has no personal My Drive quota.\n"
+                "   • To use a Shared Drive, set the env var GOOGLE_DRIVE_SHARED_DRIVE_ID to its ID.\n"
+                "   • Or switch to OAuth user credentials (using EMAIL_AUTH_METHOD=oauth)."
             )
-            print(f"ERROR: {msg}")
-            # Log ASCII-only message to avoid encoding issues
-            ascii_msg = msg.replace('Could not upload', 'ERROR: Could not upload')
-            logger.error(ascii_msg)
-        elif status == 404 or reason == 'notFound':
-            msg = (
-                f"Could not find Shared Drive with ID '{shared_drive_id}'.\n"
-                "- Ensure GOOGLE_DRIVE_SHARED_DRIVE_ID is a valid drive ID (not an email).\n"
-                "- Make sure the service account is a member of that Shared Drive."
-            )
-            print(f"ERROR: {msg}")
-            ascii_msg = msg.replace('Could not find', 'ERROR: Could not find')
-            logger.error(ascii_msg)
+            print(msg)
+            logger.error(msg)
         else:
-            logger.error(f"Failed to upload to Drive (HTTP {status}): {e}")
+            logger.error(f"Failed to upload to Drive (HTTP {e.resp.status}): {e}")
     except Exception as e:
         logger.error(f"Failed to upload to Drive: {e}")
 

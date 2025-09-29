@@ -1,4 +1,4 @@
-7"""
+"""
 ST_Faktura Task Management Script
 
 This script allows users to create new tasks by selecting customers and task types,
@@ -47,7 +47,7 @@ TASKTYPE_SHEET_RANGE = "'Tasktype'!A:A"
 
 # Tasks sheet (gid=1276274497) - Sheet name is "Opgave"
 TASKS_SHEET_URL = "https://docs.google.com/spreadsheets/d/170onDFFCveCzV6Q9F1_IhsG2LBRcw5MYxJbyocVJmq0/edit?gid=1276274497#gid=1276274497"
-TASKS_SHEET_RANGE = "Opgave!A:I"  # Include all task columns through I (including Sum)
+TASKS_SHEET_RANGE = "Opgave!A:F"  # Include discount column F
 
 
 class TaskManager:
@@ -75,7 +75,7 @@ class TaskManager:
         """
         try:
             logger.info("Retrieving customers from spreadsheet")
-            customers_data = self.sheets_client.read_sheet(self.spreadsheet_id, "Kunder!A:I")
+            customers_data = self.sheets_client.read_sheet(self.spreadsheet_id, "Kunder!A:H")
             
             customers = []
             
@@ -91,8 +91,7 @@ class TaskManager:
                             'zip': row[4] if len(row) > 4 else '',
                             'town': row[5] if len(row) > 5 else '',
                             'phone': row[6] if len(row) > 6 else '',
-                            'email': row[7] if len(row) > 7 else '',
-                            'hourly_rate': row[8] if len(row) > 8 else '0'
+                            'email': row[7] if len(row) > 7 else ''
                         }
                         customers.append(customer)
             
@@ -196,12 +195,9 @@ class TaskManager:
                 current_date,  # Date for creation of task
                 task_data['customer_name'],  # Customer name
                 task_data['tasktype'],  # Tasktype
-                task_data['pricing_type'],  # Pricing type (FixedPrice or HourlyPrice)
                 task_data['description'],  # Task description
-                task_data['time_minutes'],  # Task time in minutes (for HourlyPrice)
-                task_data['calculated_price'],  # Calculated price (fixed or hourly)
-                task_data['discount_percentage'],  # Discount percentage
-                task_data['final_sum']  # Final sum after discount
+                task_data['time_minutes'],  # Task time in minutes
+                task_data['discount_percentage']  # Discount percentage
             ]
             
             logger.info(f"Adding new task for customer: {task_data['customer_name']}")
@@ -226,7 +222,7 @@ class TaskManager:
             tasks_data = self.sheets_client.read_sheet(self.spreadsheet_id, TASKS_SHEET_RANGE)
             
             headers = [
-                "Date", "Customer Name", "Tasktype", "Pricing Type", "Task Description", "Task Time (Minutes)", "Price", "Discount (%)", "Sum"
+                "Date", "Customer Name", "Tasktype", "Task Description", "Task Time (Minutes)", "Discount (%)"
             ]
             
             # If no data or headers don't match, set them up
@@ -234,7 +230,7 @@ class TaskManager:
                 logger.info("Setting up tasks spreadsheet headers")
                 self.sheets_client.write_sheet(
                     self.spreadsheet_id,
-                    "Opgave!A1:I1",
+                    "Opgave!A1:F1",
                     [headers]
                 )
                 logger.info("Tasks headers added successfully")
@@ -609,15 +605,9 @@ def display_task_summary(task_data: Dict[str, str]) -> None:
     print(f"Date:             {datetime.now().strftime('%Y-%m-%d')}")
     print(f"Customer:         {task_data['customer_name']}")
     print(f"Task Type:        {task_data['tasktype']}")
-    print(f"Pricing Type:     {task_data['pricing_type']}")
     print(f"Description:      {task_data['description']}")
-    
-    if task_data['pricing_type'] == 'HourlyPrice':
-        print(f"Time (Minutes):   {task_data['time_minutes']}")
-    
-    print(f"Price:            {task_data['calculated_price']} DKK")
+    print(f"Time (Minutes):   {task_data['time_minutes']}")
     print(f"Discount:         {task_data['discount_percentage']}%")
-    print(f"Final Sum:        {task_data['final_sum']} DKK")
     print("="*60)
 
 
@@ -707,28 +697,13 @@ def main() -> None:
             print("\n⏭️ Task creation cancelled.")
             return
         
-        # Calculate price based on pricing type
-        if pricing_type == 'FixedPrice':
-            calculated_price = pricing_value
-        else:  # HourlyPrice
-            # Calculate: (time_minutes * hourly_rate) / 60
-            hourly_rate = float(selected_customer['hourly_rate']) if selected_customer['hourly_rate'] else 0
-            calculated_price = (task_time * hourly_rate) / 60
-        
-        # Calculate final sum after discount
-        discount_amount = calculated_price * (discount_percentage / 100)
-        final_sum = calculated_price - discount_amount
-        
         # Prepare task data
         task_data = {
             'customer_name': selected_customer['name'],
             'tasktype': selected_tasktype,
-            'pricing_type': pricing_type,
             'description': task_description,
-            'time_minutes': str(task_time) if task_time else '',
-            'calculated_price': str(calculated_price),
-            'discount_percentage': str(discount_percentage),
-            'final_sum': str(final_sum)
+            'time_minutes': str(task_time),
+            'discount_percentage': str(discount_percentage)
         }
         
         # Display summary and confirm
@@ -742,17 +717,7 @@ def main() -> None:
                 print(f"\n✅ Task added successfully!")
                 print(f"Customer: {selected_customer['name']}")
                 print(f"Task Type: {selected_tasktype}")
-                print(f"Pricing: {pricing_type}")
-                
-                if pricing_type == 'HourlyPrice':
-                    print(f"Time: {task_time} minutes")
-                    hourly_rate = float(selected_customer['hourly_rate']) if selected_customer['hourly_rate'] else 0
-                    print(f"Hourly Rate: {hourly_rate} DKK/hour")
-                
-                print(f"Total Price: {calculated_price} DKK")
-                if discount_percentage > 0:
-                    print(f"Discount: {discount_percentage}%")
-                    print(f"Final Sum: {final_sum} DKK")
+                print(f"Time: {task_time} minutes")
                 logger.info(f"Task creation completed for customer: {selected_customer['name']}")
             else:
                 print(f"\n❌ Failed to add task. Please check the logs for details.")

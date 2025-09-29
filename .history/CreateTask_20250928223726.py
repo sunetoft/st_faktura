@@ -1,4 +1,4 @@
-7"""
+"""
 ST_Faktura Task Management Script
 
 This script allows users to create new tasks by selecting customers and task types,
@@ -47,7 +47,7 @@ TASKTYPE_SHEET_RANGE = "'Tasktype'!A:A"
 
 # Tasks sheet (gid=1276274497) - Sheet name is "Opgave"
 TASKS_SHEET_URL = "https://docs.google.com/spreadsheets/d/170onDFFCveCzV6Q9F1_IhsG2LBRcw5MYxJbyocVJmq0/edit?gid=1276274497#gid=1276274497"
-TASKS_SHEET_RANGE = "Opgave!A:I"  # Include all task columns through I (including Sum)
+TASKS_SHEET_RANGE = "Opgave!A:F"  # Include discount column F
 
 
 class TaskManager:
@@ -75,7 +75,7 @@ class TaskManager:
         """
         try:
             logger.info("Retrieving customers from spreadsheet")
-            customers_data = self.sheets_client.read_sheet(self.spreadsheet_id, "Kunder!A:I")
+            customers_data = self.sheets_client.read_sheet(self.spreadsheet_id, "Kunder!A:H")
             
             customers = []
             
@@ -91,8 +91,7 @@ class TaskManager:
                             'zip': row[4] if len(row) > 4 else '',
                             'town': row[5] if len(row) > 5 else '',
                             'phone': row[6] if len(row) > 6 else '',
-                            'email': row[7] if len(row) > 7 else '',
-                            'hourly_rate': row[8] if len(row) > 8 else '0'
+                            'email': row[7] if len(row) > 7 else ''
                         }
                         customers.append(customer)
             
@@ -196,12 +195,8 @@ class TaskManager:
                 current_date,  # Date for creation of task
                 task_data['customer_name'],  # Customer name
                 task_data['tasktype'],  # Tasktype
-                task_data['pricing_type'],  # Pricing type (FixedPrice or HourlyPrice)
                 task_data['description'],  # Task description
-                task_data['time_minutes'],  # Task time in minutes (for HourlyPrice)
-                task_data['calculated_price'],  # Calculated price (fixed or hourly)
-                task_data['discount_percentage'],  # Discount percentage
-                task_data['final_sum']  # Final sum after discount
+                task_data['time_minutes']  # Task time in minutes
             ]
             
             logger.info(f"Adding new task for customer: {task_data['customer_name']}")
@@ -226,7 +221,7 @@ class TaskManager:
             tasks_data = self.sheets_client.read_sheet(self.spreadsheet_id, TASKS_SHEET_RANGE)
             
             headers = [
-                "Date", "Customer Name", "Tasktype", "Pricing Type", "Task Description", "Task Time (Minutes)", "Price", "Discount (%)", "Sum"
+                "Date", "Customer Name", "Tasktype", "Task Description", "Task Time (Minutes)", "Discount (%)"
             ]
             
             # If no data or headers don't match, set them up
@@ -234,7 +229,7 @@ class TaskManager:
                 logger.info("Setting up tasks spreadsheet headers")
                 self.sheets_client.write_sheet(
                     self.spreadsheet_id,
-                    "Opgave!A1:I1",
+                    "Opgave!A1:F1",
                     [headers]
                 )
                 logger.info("Tasks headers added successfully")
@@ -400,116 +395,6 @@ def create_new_task_type(task_manager: 'TaskManager') -> Optional[str]:
             print("❌ Task type name cannot be empty. Please enter a name.")
 
 
-def select_pricing_type() -> Optional[str]:
-    """
-    Select pricing type (FixedPrice or HourlyPrice)
-    
-    Returns:
-        Pricing type string or None if cancelled
-    """
-    print("\n" + "="*60)
-    print("PRICING TYPE SELECTION")
-    print("="*60)
-    print("Choose pricing type:")
-    print("1. FixedPrice - Set a fixed price for this task")
-    print("2. HourlyPrice - Price based on hourly rate and time spent")
-    print("q. Quit")
-    
-    while True:
-        try:
-            choice = input("\nEnter your choice (1-2 or 'q'): ").strip().lower()
-            
-            if choice == 'q':
-                return None
-            elif choice == '1':
-                return 'FixedPrice'
-            elif choice == '2':
-                return 'HourlyPrice'
-            else:
-                print("❌ Invalid selection. Please enter 1, 2, or 'q'.")
-                
-        except KeyboardInterrupt:
-            print("\n\n⏭️ Task creation cancelled.")
-            return None
-
-
-def get_fixed_price() -> Optional[float]:
-    """
-    Get fixed price amount from user
-    
-    Returns:
-        Fixed price amount or None if cancelled
-    """
-    print("\n" + "="*60)
-    print("FIXED PRICE")
-    print("="*60)
-    
-    while True:
-        try:
-            price_input = input("Enter fixed price (DKK) (or 'q' to quit): ").strip()
-            
-            if price_input.lower() == 'q':
-                return None
-            
-            price = float(price_input)
-            
-            if price < 0:
-                print("❌ Price cannot be negative. Please enter a valid amount.")
-                continue
-                
-            return price
-            
-        except ValueError:
-            print("❌ Invalid price format. Please enter a number (e.g., 1500.00).")
-        except KeyboardInterrupt:
-            print("\n\n⏭️ Task creation cancelled.")
-            return None
-
-
-def get_hourly_usage() -> Optional[int]:
-    """
-    Get hourly usage in minutes from user
-    
-    Returns:
-        Time in minutes or None if cancelled
-    """
-    print("\n" + "="*60)
-    print("HOURLY USAGE")
-    print("="*60)
-    print("Enter the time spent on this task:")
-    
-    while True:
-        try:
-            time_input = input("Time in minutes (or 'q' to quit): ").strip()
-            
-            if time_input.lower() == 'q':
-                return None
-            
-            minutes = int(time_input)
-            
-            if minutes <= 0:
-                print("❌ Time must be greater than 0 minutes.")
-                continue
-                
-            # Show time in hours and minutes for confirmation
-            hours = minutes // 60
-            remaining_minutes = minutes % 60
-            
-            if hours > 0:
-                time_display = f"{hours}h {remaining_minutes}m" if remaining_minutes > 0 else f"{hours}h"
-            else:
-                time_display = f"{minutes}m"
-                
-            print(f"📊 Time entered: {minutes} minutes ({time_display})")
-            return minutes
-            
-        except ValueError:
-            print("❌ Invalid time format. Please enter a whole number of minutes.")
-        except KeyboardInterrupt:
-            print("\n\n⏭️ Task creation cancelled.")
-            return None
-
-
 def get_task_description() -> Optional[str]:
     """
     Get task description from user
@@ -609,15 +494,8 @@ def display_task_summary(task_data: Dict[str, str]) -> None:
     print(f"Date:             {datetime.now().strftime('%Y-%m-%d')}")
     print(f"Customer:         {task_data['customer_name']}")
     print(f"Task Type:        {task_data['tasktype']}")
-    print(f"Pricing Type:     {task_data['pricing_type']}")
     print(f"Description:      {task_data['description']}")
-    
-    if task_data['pricing_type'] == 'HourlyPrice':
-        print(f"Time (Minutes):   {task_data['time_minutes']}")
-    
-    print(f"Price:            {task_data['calculated_price']} DKK")
-    print(f"Discount:         {task_data['discount_percentage']}%")
-    print(f"Final Sum:        {task_data['final_sum']} DKK")
+    print(f"Time (Minutes):   {task_data['time_minutes']}")
     print("="*60)
 
 
@@ -661,74 +539,28 @@ def main() -> None:
             print("\n⏭️ Task creation cancelled.")
             return
         
-        # Step 3: Select pricing type
-        print("\nStep 3: Select Pricing Type")
-        pricing_type = select_pricing_type()
-        
-        if not pricing_type:
-            print("\n⏭️ Task creation cancelled.")
-            return
-        
-        # Step 4: Get pricing details based on type
-        if pricing_type == 'FixedPrice':
-            print("\nStep 4: Fixed Price")
-            fixed_price = get_fixed_price()
-            
-            if fixed_price is None:
-                print("\n⏭️ Task creation cancelled.")
-                return
-                
-            pricing_value = fixed_price
-            task_time = None  # No time needed for fixed price
-            
-        else:  # HourlyPrice
-            print("\nStep 4: Hourly Usage")
-            task_time = get_hourly_usage()
-            
-            if not task_time:
-                print("\n⏭️ Task creation cancelled.")
-                return
-                
-            pricing_value = None  # Price will be calculated from hourly rate
-        
-        # Step 5: Get task description
-        print("\nStep 5: Task Description")
+        # Step 3: Get task description
+        print("\nStep 3: Task Description")
         task_description = get_task_description()
         
         if not task_description:
             print("\n⏭️ Task creation cancelled.")
             return
         
-        # Step 6: Get discount percentage
-        print("\nStep 6: Discount Percentage")
-        discount_percentage = get_discount_percentage()
+        # Step 4: Get task time
+        print("\nStep 4: Task Time")
+        task_time = get_task_time()
         
-        if discount_percentage is None:
+        if not task_time:
             print("\n⏭️ Task creation cancelled.")
             return
-        
-        # Calculate price based on pricing type
-        if pricing_type == 'FixedPrice':
-            calculated_price = pricing_value
-        else:  # HourlyPrice
-            # Calculate: (time_minutes * hourly_rate) / 60
-            hourly_rate = float(selected_customer['hourly_rate']) if selected_customer['hourly_rate'] else 0
-            calculated_price = (task_time * hourly_rate) / 60
-        
-        # Calculate final sum after discount
-        discount_amount = calculated_price * (discount_percentage / 100)
-        final_sum = calculated_price - discount_amount
         
         # Prepare task data
         task_data = {
             'customer_name': selected_customer['name'],
             'tasktype': selected_tasktype,
-            'pricing_type': pricing_type,
             'description': task_description,
-            'time_minutes': str(task_time) if task_time else '',
-            'calculated_price': str(calculated_price),
-            'discount_percentage': str(discount_percentage),
-            'final_sum': str(final_sum)
+            'time_minutes': str(task_time)
         }
         
         # Display summary and confirm
@@ -742,17 +574,7 @@ def main() -> None:
                 print(f"\n✅ Task added successfully!")
                 print(f"Customer: {selected_customer['name']}")
                 print(f"Task Type: {selected_tasktype}")
-                print(f"Pricing: {pricing_type}")
-                
-                if pricing_type == 'HourlyPrice':
-                    print(f"Time: {task_time} minutes")
-                    hourly_rate = float(selected_customer['hourly_rate']) if selected_customer['hourly_rate'] else 0
-                    print(f"Hourly Rate: {hourly_rate} DKK/hour")
-                
-                print(f"Total Price: {calculated_price} DKK")
-                if discount_percentage > 0:
-                    print(f"Discount: {discount_percentage}%")
-                    print(f"Final Sum: {final_sum} DKK")
+                print(f"Time: {task_time} minutes")
                 logger.info(f"Task creation completed for customer: {selected_customer['name']}")
             else:
                 print(f"\n❌ Failed to add task. Please check the logs for details.")

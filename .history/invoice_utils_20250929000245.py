@@ -216,7 +216,7 @@ class InvoicePDFGenerator:
             story.append(Spacer(1, 20))
             story.append(self._create_new_items_table(tasks, company_details))
             story.append(Spacer(1, 25))
-            story.append(self._create_payment_section(company_details, invoice_date, invoice_number))
+            story.append(self._create_payment_section(company_details, invoice_date))
             def add_page_elements(canvas, doc):
                 self._draw_page_elements(canvas, doc, company_details)
             doc.build(story, onFirstPage=add_page_elements, onLaterPages=add_page_elements)
@@ -244,7 +244,7 @@ Fakturanr.: {invoice_number}"""
         return table
 
     def _create_new_items_table(self, tasks: List[Dict[str, str]], company_details: Dict[str, str]) -> Table:
-        headers = ['Tasktype', 'Task description', 'Min. forbrugt', 'Price', 'Discount %', 'Sum']
+        headers = ['Tasktype', 'Task description', 'Task time (min)', 'Price', 'Discount %', 'Sum']
         data = [headers]
         subtotal = 0.0
         for t in tasks:
@@ -287,45 +287,15 @@ Fakturanr.: {invoice_number}"""
         ]))
         return table
     
-    def _create_payment_section(self, company_details: Dict[str, str], invoice_date: datetime, invoice_number: int) -> Table:
-        """Create payment terms and banking information section
-
-        Priority for payment terms days:
-        1. company_details['payment_terms_days'] if set and valid int
-        2. ENV PAYMENT_TERMS_DAYS
-        3. Fallback 8
-        """
-        # Determine payment terms days
-        import os
-        payment_terms_days = 8
-        # From company details
-        raw_ct = company_details.get('payment_terms_days') if company_details else None
-        if raw_ct:
-            try:
-                payment_terms_days = int(str(raw_ct).strip())
-            except ValueError:
-                pass
-        else:
-            # From environment
-            env_days = os.getenv('PAYMENT_TERMS_DAYS')
-            if env_days:
-                try:
-                    payment_terms_days = int(env_days.strip())
-                except ValueError:
-                    pass
-
-        due_date = invoice_date + timedelta(days=payment_terms_days)
-        bank_name = company_details.get('bank_name', '') or 'Bank'
-        bank_account = company_details.get('bank_account', '') or ''
-        regnr = ''
-        if bank_account and '/' in bank_account:
-            parts = [p.strip() for p in bank_account.split('/')]
-            if len(parts) == 2 and parts[0].replace(' ', '').isdigit():
-                regnr = parts[0]
-        payment_info = f"""<b>Betalingsbetingelser:</b> Netto {payment_terms_days} dage - forfalden {due_date.strftime('%d.%m.%Y')}<br/>
-Beløbet indbetales til vor bank. <b>{bank_name}</b>{f' - Regnr.: <b>{regnr}</b>' if regnr else ''}{f' / Kontonr.: <b>{bank_account}</b>' if bank_account else ''}<br/>
-Fakturanr. <b>{invoice_number}</b> bedes anført ved bankoverførsel<br/><br/>
-<i>Ved for sen betaling påregnes rente i henhold til gældende lovgivning.</i>"""
+    def _create_payment_section(self, company_details: Dict[str, str], invoice_date: datetime) -> Table:
+        """Create payment terms and banking information section"""
+        due_date = invoice_date + timedelta(days=8)
+        
+        # Payment terms (matching template format)
+        payment_info = f"""<b>Betalingsbetingelser:</b> Netto 14 dage - forfalden {due_date.strftime('%d.%m.%Y')}<br/>
+Beløbet indbetales til vor bank. <b>Bank Nordik</b> - Regnr.: <b>6506</b> / Kontonr.: <b>{company_details.get('bank_account', '3061152279')}</b><br/>
+Fakturanr. <b>783</b> bedes anført ved bankoverførsel<br/><br/>
+<i>Ved for sen betaling påregnes rente i henhold til gældende lovgivlning.</i>"""
         
         # Create payment section
         payment_data = [
@@ -343,40 +313,27 @@ Fakturanr. <b>{invoice_number}</b> bedes anført ved bankoverførsel<br/><br/>
         return payment_table
     
     def _draw_page_elements(self, canvas, doc, company_details: Dict[str, str]) -> None:
-        """Draw footer dynamically from company details file"""
-        name = company_details.get('company_name', '')
-        address = company_details.get('company_address', '')
-        zip_code = company_details.get('company_zip', '')
-        town = company_details.get('company_town', '')
-        cvr = company_details.get('company_cvr', '')
-        phone = company_details.get('company_phone', '')
-        email = company_details.get('company_email', '')
-        bank_name = company_details.get('bank_name', '')
-        bank_account = company_details.get('bank_account', '')
-        iban = company_details.get('iban', '')
-        swift = company_details.get('swift', '')
-        extra = company_details.get('additional_info', '')
-
-        footer_lines = []
-        line1_parts = [p for p in [name, address, f"{zip_code} {town}".strip(), f"CVR: {cvr}" if cvr else ''] if p]
-        if line1_parts:
-            footer_lines.append(" - ".join(line1_parts))
-        line2_parts = [p for p in [f"Tlf.: {phone}" if phone else '', f"Mail: {email}" if email else ''] if p]
-        if line2_parts:
-            footer_lines.append(" - ".join(line2_parts))
-        line3_parts = [p for p in [f"Bank: {bank_name}" if bank_name else '', f"Konto: {bank_account}" if bank_account else '', f"IBAN: {iban}" if iban else '', f"SWIFT: {swift}" if swift else ''] if p]
-        if line3_parts:
-            footer_lines.append(" - ".join(line3_parts))
-        if extra:
-            footer_lines.append(extra)
-
+        """Draw footer and any additional page elements"""
+        # Footer information (matching template)
+        footer_text = f"""{company_details.get('company_name', 'ST Digital')} - {company_details.get('company_address', 'Baldersgade 69 2 th - 2200 Kbh. N.')} - CVR-nr.: {company_details.get('company_cvr', '18194104')}
+Tlf.: {company_details.get('company_phone', '29439585')} - Mail: {company_details.get('company_email', 'sure@stdigital.dk')}
+Bank: {company_details.get('bank_name', 'Bank Nordik')} - Kontonr.: {company_details.get('bank_account', '6506 / 3061152279')} - IBAN-nr.: DK9165063061152279 - SWIFT-kode: BANCDKKK"""
+        
+        # Draw footer
         canvas.setFont('Helvetica', 8)
+        
+        # Split footer into lines
+        footer_lines = footer_text.split('\n')
         y_position = 2*cm
+        
         for line in footer_lines:
+            # Center the text
             text_width = canvas.stringWidth(line, 'Helvetica', 8)
             x_position = (A4[0] - text_width) / 2
             canvas.drawString(x_position, y_position, line)
             y_position -= 10
+        
+        # Draw a line above footer
         canvas.setStrokeColor(colors.black)
         canvas.setLineWidth(0.5)
-        canvas.line(2.0*cm, 2.5*cm, A4[0] - 2.0*cm, 2.5*cm)
+        canvas.line(2.5*cm, 2.5*cm, A4[0] - 2.5*cm, 2.5*cm)

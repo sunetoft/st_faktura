@@ -312,7 +312,7 @@ def get_hourly_rate() -> str:
 
 def collect_customer_data() -> Dict[str, str]:
     """
-    Collect customer data from user input with CVR lookup
+    Collect customer data from user input
     
     Returns:
         Dictionary containing customer data
@@ -325,57 +325,15 @@ def collect_customer_data() -> Dict[str, str]:
     
     customer_data = {}
     
-    # Step 1: Get CVR number and use it as Customer ID
-    cvr_number = get_user_input("Company CVR Number")
-    customer_data['customer_id'] = cvr_number  # Use CVR as Customer ID
-    customer_data['company_cvr'] = cvr_number
-    
-    print("\n🔍 Looking up company data from CVR register...")
-    cvr_data = lookup_cvr_data(cvr_number)
-    
-    if cvr_data:
-        # CVR data found - display and ask for confirmation
-        display_cvr_data(cvr_data)
-        
-        confirm = input("\nUse this company data? (y/N): ").strip().lower()
-        
-        if confirm == 'y':
-            # Use CVR data and only prompt for missing fields
-            customer_data.update(cvr_data)
-            
-            # Email is usually not available from CVR, so always ask
-            if not customer_data['company_email']:
-                customer_data['company_email'] = get_user_input("Company Email", required=False)
-            
-            # Allow user to update phone if needed
-            if customer_data['company_phone']:
-                print(f"\nCurrent phone: {customer_data['company_phone']}")
-                new_phone = get_user_input("Update phone (press Enter to keep current)", required=False)
-                if new_phone:
-                    customer_data['company_phone'] = new_phone
-            else:
-                customer_data['company_phone'] = get_user_input("Company Phone", required=False)
-        else:
-            # User declined CVR data - collect manually
-            print("\n📝 Please enter company information manually:")
-            customer_data['company_name'] = get_user_input("Company Name")
-            customer_data['company_address'] = get_user_input("Company Address")
-            customer_data['company_zip'] = get_user_input("Company Zip Code")
-            customer_data['company_town'] = get_user_input("Company Town")
-            customer_data['company_phone'] = get_user_input("Company Phone")
-            customer_data['company_email'] = get_user_input("Company Email")
-    else:
-        # CVR lookup failed - collect all data manually
-        print("\n❌ Could not find company data in CVR register.")
-        print("📝 Please enter company information manually:")
-        customer_data['company_name'] = get_user_input("Company Name")
-        customer_data['company_address'] = get_user_input("Company Address")
-        customer_data['company_zip'] = get_user_input("Company Zip Code")
-        customer_data['company_town'] = get_user_input("Company Town")
-        customer_data['company_phone'] = get_user_input("Company Phone")
-        customer_data['company_email'] = get_user_input("Company Email")
-    
-    # Always ask for hourly rate
+    # Collect all required customer information
+    customer_data['customer_id'] = get_user_input("Customer ID")
+    customer_data['company_name'] = get_user_input("Company Name")
+    customer_data['company_address'] = get_user_input("Company Address")
+    customer_data['company_cvr'] = get_user_input("Company CVR")
+    customer_data['company_zip'] = get_user_input("Company Zip Code")
+    customer_data['company_town'] = get_user_input("Company Town")
+    customer_data['company_phone'] = get_user_input("Company Phone")
+    customer_data['company_email'] = get_user_input("Company Email")
     customer_data['hourly_rate'] = get_hourly_rate()
     
     return customer_data

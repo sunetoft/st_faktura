@@ -1,4 +1,4 @@
-7"""
+"""
 ST_Faktura Task Management Script
 
 This script allows users to create new tasks by selecting customers and task types,
@@ -47,7 +47,7 @@ TASKTYPE_SHEET_RANGE = "'Tasktype'!A:A"
 
 # Tasks sheet (gid=1276274497) - Sheet name is "Opgave"
 TASKS_SHEET_URL = "https://docs.google.com/spreadsheets/d/170onDFFCveCzV6Q9F1_IhsG2LBRcw5MYxJbyocVJmq0/edit?gid=1276274497#gid=1276274497"
-TASKS_SHEET_RANGE = "Opgave!A:I"  # Include all task columns through I (including Sum)
+TASKS_SHEET_RANGE = "Opgave!A:H"  # Include all task columns through H
 
 
 class TaskManager:
@@ -200,8 +200,7 @@ class TaskManager:
                 task_data['description'],  # Task description
                 task_data['time_minutes'],  # Task time in minutes (for HourlyPrice)
                 task_data['calculated_price'],  # Calculated price (fixed or hourly)
-                task_data['discount_percentage'],  # Discount percentage
-                task_data['final_sum']  # Final sum after discount
+                task_data['discount_percentage']  # Discount percentage
             ]
             
             logger.info(f"Adding new task for customer: {task_data['customer_name']}")
@@ -226,7 +225,7 @@ class TaskManager:
             tasks_data = self.sheets_client.read_sheet(self.spreadsheet_id, TASKS_SHEET_RANGE)
             
             headers = [
-                "Date", "Customer Name", "Tasktype", "Pricing Type", "Task Description", "Task Time (Minutes)", "Price", "Discount (%)", "Sum"
+                "Date", "Customer Name", "Tasktype", "Pricing Type", "Task Description", "Task Time (Minutes)", "Price", "Discount (%)"
             ]
             
             # If no data or headers don't match, set them up
@@ -234,7 +233,7 @@ class TaskManager:
                 logger.info("Setting up tasks spreadsheet headers")
                 self.sheets_client.write_sheet(
                     self.spreadsheet_id,
-                    "Opgave!A1:I1",
+                    "Opgave!A1:H1",
                     [headers]
                 )
                 logger.info("Tasks headers added successfully")
@@ -617,7 +616,6 @@ def display_task_summary(task_data: Dict[str, str]) -> None:
     
     print(f"Price:            {task_data['calculated_price']} DKK")
     print(f"Discount:         {task_data['discount_percentage']}%")
-    print(f"Final Sum:        {task_data['final_sum']} DKK")
     print("="*60)
 
 
@@ -715,10 +713,6 @@ def main() -> None:
             hourly_rate = float(selected_customer['hourly_rate']) if selected_customer['hourly_rate'] else 0
             calculated_price = (task_time * hourly_rate) / 60
         
-        # Calculate final sum after discount
-        discount_amount = calculated_price * (discount_percentage / 100)
-        final_sum = calculated_price - discount_amount
-        
         # Prepare task data
         task_data = {
             'customer_name': selected_customer['name'],
@@ -727,8 +721,7 @@ def main() -> None:
             'description': task_description,
             'time_minutes': str(task_time) if task_time else '',
             'calculated_price': str(calculated_price),
-            'discount_percentage': str(discount_percentage),
-            'final_sum': str(final_sum)
+            'discount_percentage': str(discount_percentage)
         }
         
         # Display summary and confirm
@@ -746,13 +739,8 @@ def main() -> None:
                 
                 if pricing_type == 'HourlyPrice':
                     print(f"Time: {task_time} minutes")
-                    hourly_rate = float(selected_customer['hourly_rate']) if selected_customer['hourly_rate'] else 0
-                    print(f"Hourly Rate: {hourly_rate} DKK/hour")
-                
-                print(f"Total Price: {calculated_price} DKK")
-                if discount_percentage > 0:
-                    print(f"Discount: {discount_percentage}%")
-                    print(f"Final Sum: {final_sum} DKK")
+                else:
+                    print(f"Fixed Price: {pricing_value} DKK")
                 logger.info(f"Task creation completed for customer: {selected_customer['name']}")
             else:
                 print(f"\n❌ Failed to add task. Please check the logs for details.")

@@ -325,9 +325,11 @@ def collect_customer_data() -> Dict[str, str]:
     
     customer_data = {}
     
-    # Step 1: Get CVR number and use it as Customer ID
+    # Step 1: Get Customer ID first
+    customer_data['customer_id'] = get_user_input("Customer ID")
+    
+    # Step 2: Get CVR number and attempt lookup
     cvr_number = get_user_input("Company CVR Number")
-    customer_data['customer_id'] = cvr_number  # Use CVR as Customer ID
     customer_data['company_cvr'] = cvr_number
     
     print("\n🔍 Looking up company data from CVR register...")

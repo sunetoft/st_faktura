@@ -486,8 +486,8 @@ def select_tasks(tasks: List[Dict[str, str]]) -> Optional[List[Dict[str, str]]]:
     
     while True:
         try:
-            selection = input("Selection (or 'q' to quit): ")
-
+            selection = input("Selection (or 'q' to quit): ").strip()
+            
             if selection.lower() == 'q':
                 return None
             
@@ -628,7 +628,6 @@ def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
     """Upload a file to Google Drive under the given folder (creates folder if needed)."""
     try:
         from google.oauth2 import service_account
-        from googleapiclient.errors import HttpError
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaFileUpload
         # Determine if uploading to a Shared Drive instead of My Drive
@@ -667,38 +666,15 @@ def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
         upload_kwargs = {'supportsAllDrives': True} if shared_drive_id else {}
         drive_service.files().create(body=file_meta, media_body=media, fields='id', **upload_kwargs).execute()
         logger.info(f"Uploaded invoice to Google Drive folder '{folder_name}'")
-    except HttpError as e:
-        # Handle Drive API HTTP errors
-        status = e.resp.status
-        # Attempt to extract the error reason
-        try:
-            details = e.error_details[0]
-            reason = details.get('reason', '')
-        except Exception:
-            reason = ''
-        if status == 403 or reason == 'storageQuotaExceeded':
-            msg = (
-                "Could not upload invoice to Google Drive: service account has no personal My Drive quota.\n"
-                "- To use a Shared Drive, set the env var GOOGLE_DRIVE_SHARED_DRIVE_ID to its ID.\n"
-                "- Or switch to OAuth user credentials (using EMAIL_AUTH_METHOD=oauth)."
-            )
-            print(f"ERROR: {msg}")
-            # Log ASCII-only message to avoid encoding issues
-            ascii_msg = msg.replace('Could not upload', 'ERROR: Could not upload')
-            logger.error(ascii_msg)
-        elif status == 404 or reason == 'notFound':
-            msg = (
-                f"Could not find Shared Drive with ID '{shared_drive_id}'.\n"
-                "- Ensure GOOGLE_DRIVE_SHARED_DRIVE_ID is a valid drive ID (not an email).\n"
-                "- Make sure the service account is a member of that Shared Drive."
-            )
-            print(f"ERROR: {msg}")
-            ascii_msg = msg.replace('Could not find', 'ERROR: Could not find')
-            logger.error(ascii_msg)
-        else:
-            logger.error(f"Failed to upload to Drive (HTTP {status}): {e}")
     except Exception as e:
-        logger.error(f"Failed to upload to Drive: {e}")
+        # Provide guidance if quota is exceeded (service accounts have no personal My Drive quota)
+        if 'storageQuotaExceeded' in str(e):
+            logger.error(
+                "Failed to upload to Drive: Service account cannot write to My Drive (quota exceeded). "
+                "Consider specifying a Shared Drive via the GOOGLE_DRIVE_SHARED_DRIVE_ID environment variable, "
+                "or switch to OAuth user credentials." )
+        else:
+            logger.error(f"Failed to upload to Drive: {e}")
 
 
 def main() -> None:
