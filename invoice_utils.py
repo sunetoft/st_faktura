@@ -198,6 +198,18 @@ class InvoicePDFGenerator:
             alignment=TA_CENTER,
             fontName='Helvetica'
         ))
+        # Description (wrapping) style for task descriptions in table
+        if 'TaskDescription' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='TaskDescription',
+                parent=self.styles['Normal'],
+                fontSize=9,
+                leading=11,
+                alignment=TA_LEFT,
+                wordWrap='LTR',
+                allowWidows=1,
+                allowOrphans=1,
+            ))
     
     def generate_invoice_pdf(
         self,
@@ -351,12 +363,33 @@ class InvoicePDFGenerator:
         return table
 
     def _create_new_items_table(self, tasks: List[Dict[str, str]], company_details: Dict[str, str]) -> Table:
-        headers = ['Tasktype', 'Task description', 'Min. forbrugt', 'Pris', 'Discount %', 'Sum']
+        # Determine if any discount exists (non-empty and not 0 or 0.0)
+        any_discount = False
+        for t in tasks:
+            d_raw = str(t.get('discount_percentage', '')).strip()
+            if d_raw and d_raw not in ('0', '0.0', '0.00'):
+                try:
+                    if float(d_raw) != 0.0:
+                        any_discount = True
+                        break
+                except ValueError:
+                    # If non-numeric but present, consider it a discount marker
+                    any_discount = True
+                    break
+
+        if any_discount:
+            headers = ['Tasktype', 'Task description', 'Min. forbrugt', 'Pris', 'Discount %', 'Sum']
+        else:
+            headers = ['Tasktype', 'Task description', 'Min. forbrugt', 'Pris', 'Sum']
+
         data = [headers]
         subtotal = 0.0
+        from reportlab.platypus import Paragraph as RLParagraph
         for t in tasks:
             tasktype = t.get('tasktype','')
-            desc = t.get('description','')
+            desc_raw = t.get('description','') or ''
+            # Escape simple problematic characters (basic) – ReportLab handles most text
+            desc_para = RLParagraph(desc_raw.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;'), self.styles['TaskDescription'])
             time_min = t.get('time_minutes','')
             price = t.get('price','0')
             discount = t.get('discount_percentage','0')
@@ -365,36 +398,59 @@ class InvoicePDFGenerator:
                 subtotal += float(line_sum) if line_sum else 0.0
             except ValueError:
                 pass
-            data.append([
-                tasktype,
-                desc,
-                time_min,
-                price,
-                discount,
-                line_sum
-            ])
+            if any_discount:
+                row = [tasktype, desc_para, time_min, price, discount, line_sum]
+            else:
+                row = [tasktype, desc_para, time_min, price, line_sum]
+            data.append(row)
+
         # Summary rows
         moms = subtotal * 0.25
         total = subtotal + moms
-        data.append(['', '', '', '', 'Moms (25%)', f"{moms:.2f}"])
-        data.append(['', '', '', '', 'Samlet pris', f"{total:.2f}"])
-        # Column width proportions originally based on 18cm total; rescale to CONTENT_WIDTH
-        fractions = [0.1667, 0.3333, 0.1222, 0.1222, 0.1222, 0.1334]  # sum ~ 1.0
+        if any_discount:
+            data.append(['', '', '', '', 'Moms (25%)', f"{moms:.2f}"])
+            data.append(['', '', '', '', 'Samlet pris', f"{total:.2f}"])
+        else:
+            data.append(['', '', '', 'Moms (25%)', f"{moms:.2f}"])
+            data.append(['', '', '', 'Samlet pris', f"{total:.2f}"])
+
+        # Column width proportions originally based on 18cm total; adjust if discount column removed
+        if any_discount:
+            fractions = [0.1667, 0.3333, 0.1222, 0.1222, 0.1222, 0.1334]  # sum ~1.0
+        else:
+            # Reallocate previous discount fraction proportionally to description and sum columns
+            fractions = [0.18, 0.38, 0.14, 0.14, 0.16]  # must sum ~1.0
         col_widths = [CONTENT_WIDTH * f for f in fractions]
+
         table = Table(data, colWidths=col_widths)
-        table.setStyle(TableStyle([
+        # Build table style dynamically based on column count
+        style_cmds = [
             ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
             ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
             ('LINEBELOW', (0,0), (-1,0), 0.5, colors.black),
-            ('ALIGN', (2,1), (2,-3), 'RIGHT'),
-            ('ALIGN', (3,1), (5,-1), 'RIGHT'),
             ('VALIGN', (0,0), (-1,-1), 'TOP'),
             ('FONTSIZE', (0,0), (-1,-1), 9),
             ('TOPPADDING', (0,0), (-1,-1), 4),
             ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-            ('LINEABOVE', (4,-2), (5,-2), 0.5, colors.black),
-            ('FONTNAME', (4,-1), (5,-1), 'Helvetica-Bold'),
-        ]))
+        ]
+        # Alignment indices depend on discount presence
+        if any_discount:
+            # Columns: 0 tasktype,1 desc,2 min,3 price,4 discount,5 sum
+            style_cmds.extend([
+                ('ALIGN', (2,1), (2,-3), 'RIGHT'),
+                ('ALIGN', (3,1), (5,-1), 'RIGHT'),
+                ('LINEABOVE', (4,-2), (5,-2), 0.5, colors.black),
+                ('FONTNAME', (4,-1), (5,-1), 'Helvetica-Bold'),
+            ])
+        else:
+            # Columns: 0 tasktype,1 desc,2 min,3 price,4 sum
+            style_cmds.extend([
+                ('ALIGN', (2,1), (2,-3), 'RIGHT'),
+                ('ALIGN', (3,1), (4,-1), 'RIGHT'),
+                ('LINEABOVE', (3,-2), (4,-2), 0.5, colors.black),
+                ('FONTNAME', (3,-1), (4,-1), 'Helvetica-Bold'),
+            ])
+        table.setStyle(TableStyle(style_cmds))
         return table
     
     def _create_payment_section(self, company_details: Dict[str, str], invoice_date: datetime, invoice_number: int) -> Table:
