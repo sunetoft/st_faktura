@@ -75,3 +75,4 @@ logs/
 # Temporary files
 *.tmp
 *.temp\n# Local history and generated artifacts\n.history/\ninvoices/*.pdf\n
+\nst_faktura.git\n
