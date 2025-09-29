@@ -15,7 +15,8 @@ import json
 import logging
 import sys
 import smtplib
-from datetime import datetime
+import argparse
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -760,7 +761,14 @@ def main() -> None:
         
         # Initialize invoice manager
         invoice_manager = InvoiceManager(client)
-        
+
+        # Parse CLI arguments (allow placed after credit memo prompt for minimal disruption)
+        parser = argparse.ArgumentParser(description="Create and send an invoice")
+        parser.add_argument('--no-preview', action='store_true', help='Skip detailed invoice preview (still asks final confirmation unless --yes)')
+        parser.add_argument('--preview', action='store_true', help='Force show detailed invoice preview (default behavior)')
+        parser.add_argument('-y','--yes', action='store_true', help='Assume yes to all confirmations (non-interactive)')
+        args, unknown = parser.parse_known_args()
+
         print("\n" + "="*60)
         title = "KREDITNOTA" if credit_memo else "INVOICE CREATION"
         print(f"ST_FAKTURA - {title}")
@@ -770,16 +778,16 @@ def main() -> None:
         print("\nStep 1: Select Customer")
         customers = invoice_manager.get_customers()
         selected_customer = select_customer(customers)
-        
+
         if not selected_customer:
             print("\n⏭️ Invoice creation cancelled.")
             return
-        
+
         # Step 2: Select tasks
         print(f"\nStep 2: Select Tasks for {selected_customer['name']}")
         customer_tasks = invoice_manager.get_customer_tasks(selected_customer['name'])
         selected_tasks = select_tasks(customer_tasks)
-        
+
         if not selected_tasks:
             print("\n⏭️ Invoice creation cancelled.")
             return
@@ -788,6 +796,85 @@ def main() -> None:
         hourly_rate = selected_customer['hourly_rate']
         print(f"\nUsing customer's hourly rate: {hourly_rate:.2f} DKK")
         calculate_invoice_summary(selected_tasks, hourly_rate)
+
+        # Extended preview of invoice BEFORE number allocation & PDF generation
+        def safe_int(value) -> int:
+            try:
+                if value is None:
+                    return 0
+                s = str(value).strip()
+                if s == '':
+                    return 0
+                return int(float(s))
+            except (ValueError, TypeError):
+                return 0
+
+        show_preview = (not args.no_preview) or args.preview
+        if show_preview:
+            try:
+                # Peek invoice number (will not increment)
+                peek_number = invoice_manager.invoice_number_manager.peek_next_invoice_number()
+            except Exception:
+                peek_number = 'N/A'
+            print("\n" + "-"*60)
+            print("INVOICE PREVIEW (Not yet generated)")
+            print("-"*60)
+            print(f"Prospective invoice number: {peek_number}")
+            # Payment terms (attempt to derive due date similar to PDF logic)
+            payment_terms_days = 8
+            raw_ct = None
+            try:
+                # Lazy load company details (won't persist number) for due date; reuse loader
+                cdetails = invoice_manager.load_company_details()
+                if cdetails:
+                    raw_ct = cdetails.get('payment_terms_days')
+            except Exception:
+                pass
+            if raw_ct:
+                try:
+                    payment_terms_days = int(str(raw_ct).strip())
+                except ValueError:
+                    pt_env = os.getenv('PAYMENT_TERMS_DAYS')
+                    if pt_env:
+                        try:
+                            payment_terms_days = int(pt_env.strip())
+                        except ValueError:
+                            pass
+            else:
+                pt_env = os.getenv('PAYMENT_TERMS_DAYS')
+                if pt_env:
+                    try:
+                        payment_terms_days = int(pt_env.strip())
+                    except ValueError:
+                        pass
+            issue_date = datetime.now()
+            due_date = issue_date + timedelta(days=payment_terms_days)
+            print(f"Issue date: {issue_date.strftime('%d.%m.%Y')}  |  Due date (net {payment_terms_days}): {due_date.strftime('%d.%m.%Y')}")
+            print(f"Customer: {selected_customer.get('name','')}  CVR: {selected_customer.get('cvr','')}")
+            print("Tasks:")
+            total_minutes_preview = 0
+            for idx, t in enumerate(selected_tasks, 1):
+                m = safe_int(t.get('time_minutes'))
+                total_minutes_preview += m
+                desc = t.get('description','')
+                short_desc = (desc[:70] + '...') if len(desc) > 73 else desc
+                print(f" {idx:2d}. {t.get('date','')} | {t.get('tasktype','')} | {m} min | Sum: {t.get('sum','0')} | {short_desc}")
+            print("-"*60)
+            # Derived monetary summary from selected tasks' sum column
+            subtotal_preview = 0.0
+            for t in selected_tasks:
+                try:
+                    subtotal_preview += float(t.get('sum','0') or 0)
+                except ValueError:
+                    pass
+            vat_preview = subtotal_preview * 0.25
+            total_preview = subtotal_preview + vat_preview
+            print(f"Subtotal (from task sums): {subtotal_preview:.2f} DKK")
+            print(f"VAT 25%:                 {vat_preview:.2f} DKK")
+            print(f"TOTAL incl. VAT:         {total_preview:.2f} DKK")
+            print("-"*60)
+        else:
+            print("(Preview skipped) Use --preview to force showing it.")
         
         # Warn about tasks already invoiced; allow reselection instead of exit
         while True:
@@ -800,7 +887,11 @@ def main() -> None:
                 print("\n⏭️ Invoice creation cancelled.")
                 return
 
-        confirm = input("\nDo you want to generate this invoice? (y/N): ").strip().lower()
+        if args.yes:
+            confirm = 'y'
+            print("\n--yes supplied: proceeding without interactive confirmation.")
+        else:
+            confirm = input("\nDo you want to generate this invoice? (y/N): ").strip().lower()
         
         if confirm != 'y':
             # Offer chance to adjust tasks instead of hard cancel
@@ -848,8 +939,12 @@ def main() -> None:
         
         # Step 5: Send email (optional)
         if selected_customer['email']:
-            send_email = input(f"\nSend invoice to {selected_customer['email']}? (y/N): ").strip().lower()
-            
+            if args.yes:
+                send_email = 'y'
+                print(f"\n--yes supplied: auto-sending to {selected_customer['email']}")
+            else:
+                send_email = input(f"\nSend invoice to {selected_customer['email']}? (y/N): ").strip().lower()
+
             if send_email == 'y':
                 # Extract invoice number from filename or use the one we just generated
                 import re
@@ -857,7 +952,10 @@ def main() -> None:
                 current_invoice_number = int(match.group(1)) if match else 785
                 
                 # Optional CC prompt (single or comma separated)
-                cc_input = input("Enter additional CC email(s) (comma separated) or press Enter to skip: ").strip()
+                if args.yes:
+                    cc_input = ''
+                else:
+                    cc_input = input("Enter additional CC email(s) (comma separated) or press Enter to skip: ").strip()
                 cc_list: List[str] = []
                 if cc_input:
                     # Split and basic validate
@@ -892,7 +990,11 @@ def main() -> None:
                     pass
                 copy_choice = 'n'
                 if not skip_bookkeeping:
-                    copy_choice = input(f"\nSend a copy to bookkeeping ({BOOKKEEPING_EMAIL})? (y/N): ").strip().lower()
+                    if args.yes:
+                        copy_choice = 'y'
+                        print(f"\n--yes supplied: auto-sending bookkeeping copy to {BOOKKEEPING_EMAIL}")
+                    else:
+                        copy_choice = input(f"\nSend a copy to bookkeeping ({BOOKKEEPING_EMAIL})? (y/N): ").strip().lower()
                 if copy_choice == 'y':
                     # reuse invoice number gathered above
                     if 'generated_invoice_number' not in locals() or generated_invoice_number is None:

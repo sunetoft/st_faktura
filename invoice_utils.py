@@ -70,6 +70,25 @@ class InvoiceNumberManager:
             logger.error(f"Failed to get next invoice number: {e}")
             # Fallback to starting number
             return 785
+
+    def peek_next_invoice_number(self) -> int:
+        """Peek at what the next invoice number would be WITHOUT incrementing/persisting.
+
+        Returns:
+            int: The next invoice number (current + 1) best-effort. If any error occurs
+                 we fallback to 785 (the starting number in existing logic).
+        """
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                current_number = config.get('current_invoice_number', 784)
+            else:
+                current_number = 784
+            return current_number + 1
+        except Exception as e:
+            logger.warning(f"Failed to peek next invoice number, using fallback: {e}")
+            return 785
     
     def _save_invoice_number(self, invoice_number: int) -> None:
         """
