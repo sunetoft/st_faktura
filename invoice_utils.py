@@ -203,8 +203,8 @@ class InvoicePDFGenerator:
             self.styles.add(ParagraphStyle(
                 name='TaskDescription',
                 parent=self.styles['Normal'],
-                fontSize=9,
-                leading=11,
+                fontSize=8,
+                leading=10,
                 alignment=TA_LEFT,
                 wordWrap='LTR',
                 allowWidows=1,
@@ -429,9 +429,13 @@ class InvoicePDFGenerator:
             ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
             ('LINEBELOW', (0,0), (-1,0), 0.5, colors.black),
             ('VALIGN', (0,0), (-1,-1), 'TOP'),
-            ('FONTSIZE', (0,0), (-1,-1), 9),
-            ('TOPPADDING', (0,0), (-1,-1), 4),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            # Header slightly larger than body
+            ('FONTSIZE', (0,0), (-1,0), 9),
+            ('FONTSIZE', (0,1), (-1,-1), 8),
+            ('TOPPADDING', (0,0), (-1,0), 4),
+            ('BOTTOMPADDING', (0,0), (-1,0), 4),
+            ('TOPPADDING', (0,1), (-1,-1), 2),
+            ('BOTTOMPADDING', (0,1), (-1,-1), 2),
         ]
         # Alignment indices depend on discount presence
         if any_discount:
@@ -451,6 +455,23 @@ class InvoicePDFGenerator:
                 ('FONTNAME', (3,-1), (4,-1), 'Helvetica-Bold'),
             ])
         table.setStyle(TableStyle(style_cmds))
+        # Apply alternating row background stripes (exclude header and summary rows)
+        try:
+            total_rows = len(data)
+            # Data rows are from 1 to total_rows - 3 (because last 2 are summary rows)
+            data_end = total_rows - 3 if total_rows >= 3 else 0
+            if data_end > 0:
+                stripe_color_1 = colors.whitesmoke  # keep header distinct
+                stripe_color_2 = colors.Color(0.95, 0.95, 0.95)
+                for row_idx in range(1, data_end + 1):
+                    if row_idx % 2 == 1:
+                        # Slightly different very light grey
+                        table.setStyle(TableStyle([
+                            ('BACKGROUND', (0, row_idx), (-1, row_idx), stripe_color_2)
+                        ]))
+                    # Even rows stay default (white)
+        except Exception as e:
+            logger.warning(f"Failed applying row stripes: {e}")
         return table
     
     def _create_payment_section(self, company_details: Dict[str, str], invoice_date: datetime, invoice_number: int) -> Table:
