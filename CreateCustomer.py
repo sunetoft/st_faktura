@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # Customer spreadsheet configuration
 CUSTOMER_SHEET_URL = "https://docs.google.com/spreadsheets/d/170onDFFCveCzV6Q9F1_IhsG2LBRcw5MYxJbyocVJmq0/edit?gid=0#gid=0"
 CUSTOMER_SPREADSHEET_ID = extract_spreadsheet_id(CUSTOMER_SHEET_URL)
-CUSTOMER_SHEET_RANGE = "A:I"  # Columns A through I for customer data (including hourly rate)
+CUSTOMER_SHEET_RANGE = "A:K"  # Extended to include Hosting yearly price (HostPrice) and RenewDate (day.month)
 
 
 class CustomerManager:
@@ -152,7 +152,9 @@ class CustomerManager:
                 customer_data['company_town'],
                 customer_data['company_phone'],
                 customer_data['company_email'],
-                customer_data['hourly_rate']
+                customer_data['hourly_rate'],
+                customer_data.get('host_price',''),
+                customer_data.get('renew_date','')
             ]
             
             # Add customer to spreadsheet
@@ -180,14 +182,15 @@ class CustomerManager:
             # If no data or first row doesn't look like headers, add them
             headers = [
                 "Customer ID", "Company Name", "Company Address", "Company CVR",
-                "Company Zip", "Company Town", "Company Phone", "Company Email", "Hourly Rate (DKK)"
+                "Company Zip", "Company Town", "Company Phone", "Company Email", "Hourly Rate (DKK)",
+                "HostPrice (Year)", "RenewDate (d.m)"
             ]
             
             if not customers or len(customers[0]) != len(headers):
                 logger.info("Setting up spreadsheet headers")
                 self.sheets_client.write_sheet(
                     self.spreadsheet_id,
-                    "A1:I1",
+                    "A1:K1",
                     [headers]
                 )
                 logger.info("Headers added successfully")
@@ -377,8 +380,66 @@ def collect_customer_data() -> Dict[str, str]:
     
     # Always ask for hourly rate
     customer_data['hourly_rate'] = get_hourly_rate()
+
+    # Optional hosting deal
+    hosting = HostingDeal()
+    customer_data['host_price'] = hosting.get('host_price','')
+    customer_data['renew_date'] = hosting.get('renew_date','')
     
     return customer_data
+
+
+def HostingDeal() -> Dict[str, str]:
+    """Prompt user for optional hosting deal information.
+
+    Returns a dict with keys:
+      - host_price: yearly hosting price as string ('' if skipped)
+      - renew_date: renewal date in d.m format ('' if skipped)
+
+    Validation rules:
+      * host_price must be positive number if provided
+      * renew_date format: d.m or dd.mm (1-31 / 1-12). Leading zeros accepted, stored normalized without leading zeros (e.g. 01.09 -> 1.9)
+      * If user enters renew date but no host price, we'll reprompt (renew date only makes sense with a price)
+    """
+    print("\n--- HOSTING DEAL (optional) ---")
+    result = {"host_price": "", "renew_date": ""}
+    try:
+        host_input = input("Yearly hosting price (DKK) - press Enter to skip: ").strip()
+        if not host_input:
+            return result
+        try:
+            host_price = float(host_input.replace(',', '.'))
+            if host_price <= 0:
+                print("Hosting price must be greater than 0. Skipping hosting deal.")
+                return result
+            result['host_price'] = f"{host_price:.2f}".rstrip('0').rstrip('.')
+        except ValueError:
+            print("Invalid number. Skipping hosting deal.")
+            return result
+
+        while True:
+            renew_raw = input("Renewal date (day.month) e.g. 21.9 or 01.09: ").strip()
+            if not renew_raw:
+                print("Renewal date required when hosting price is provided. Please enter it.")
+                continue
+            parts = renew_raw.replace(' ', '').split('.')
+            if len(parts) != 2:
+                print("Format must be day.month (e.g. 21.9). Try again.")
+                continue
+            day_s, month_s = parts
+            if not (day_s.isdigit() and month_s.isdigit()):
+                print("Day and month must be numbers. Try again.")
+                continue
+            day = int(day_s)
+            month = int(month_s)
+            if not (1 <= day <= 31 and 1 <= month <= 12):
+                print("Day must be 1-31 and month 1-12. Try again.")
+                continue
+            result['renew_date'] = f"{day}.{month}"
+            break
+    except KeyboardInterrupt:
+        print("\nSkipping hosting deal input.")
+    return result
 
 
 def display_customer_summary(customer_data: Dict[str, str]) -> None:
@@ -400,6 +461,9 @@ def display_customer_summary(customer_data: Dict[str, str]) -> None:
     print(f"Company Town:     {customer_data['company_town']}")
     print(f"Company Phone:    {customer_data['company_phone']}")
     print(f"Company Email:    {customer_data['company_email']}")
+    if customer_data.get('host_price') or customer_data.get('renew_date'):
+        print(f"Hosting Price:    {customer_data.get('host_price','') or '(none)'}")
+        print(f"Renew Date:       {customer_data.get('renew_date','') or '(none)'}")
     print("="*50)
 
 

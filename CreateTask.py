@@ -1,4 +1,4 @@
-7"""
+"""
 ST_Faktura Task Management Script
 
 This script allows users to create new tasks by selecting customers and task types,

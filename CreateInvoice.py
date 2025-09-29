@@ -273,7 +273,8 @@ class InvoiceManager:
         customer_email: str,
         pdf_path: str,
         customer_name: str,
-        invoice_number: int
+        invoice_number: int,
+        cc_emails: Optional[List[str]] = None
     ) -> bool:
         """
         Send invoice via email
@@ -322,6 +323,15 @@ class InvoiceManager:
             msg = MIMEMultipart()
             msg['From'] = sender_email
             msg['To'] = customer_email
+            # Add CC header if provided
+            cc_emails_clean: List[str] = []
+            if cc_emails:
+                for addr in cc_emails:
+                    a = addr.strip()
+                    if a and a not in cc_emails_clean and a.lower() != customer_email.lower():
+                        cc_emails_clean.append(a)
+            if cc_emails_clean:
+                msg['Cc'] = ", ".join(cc_emails_clean)
             # Updated branding: use 'ST Digital'
             msg['Subject'] = f"Faktura #{invoice_number} - ST Digital"
             
@@ -364,7 +374,9 @@ ST_Faktura
             else:
                 server.login(sender_email, sender_password)
             text = msg.as_string()
-            server.sendmail(sender_email, customer_email, text)
+            # Aggregate all recipients (To + CC)
+            all_recipients = [customer_email] + cc_emails_clean
+            server.sendmail(sender_email, all_recipients, text)
             server.quit()
             
             logger.info(f"Invoice email sent to {customer_email}")
@@ -844,20 +856,43 @@ def main() -> None:
                 match = re.search(r'faktura_(\d+)_', pdf_path)
                 current_invoice_number = int(match.group(1)) if match else 785
                 
+                # Optional CC prompt (single or comma separated)
+                cc_input = input("Enter additional CC email(s) (comma separated) or press Enter to skip: ").strip()
+                cc_list: List[str] = []
+                if cc_input:
+                    # Split and basic validate
+                    for raw in cc_input.split(','):
+                        addr = raw.strip()
+                        if addr and '@' in addr and addr not in cc_list:
+                            cc_list.append(addr)
                 if invoice_manager.send_invoice_email(
-                    selected_customer['email'], 
-                    pdf_path, 
-                    selected_customer['name'], 
-                    current_invoice_number
+                    selected_customer['email'],
+                    pdf_path,
+                    selected_customer['name'],
+                    current_invoice_number,
+                    cc_emails=cc_list if cc_list else None
                 ):
-                    print(f"✅ Invoice sent to {selected_customer['email']}")
+                    target_msg = selected_customer['email'] + (f" (CC: {', '.join(cc_list)})" if cc_list else "")
+                    print(f"✅ Invoice sent to {target_msg}")
                 else:
                     print("❌ Failed to send invoice email")
 
         # Step 6: Offer sending bookkeeping copy
         try:
             if BOOKKEEPING_EMAIL:
-                copy_choice = input(f"\nSend a copy to bookkeeping ({BOOKKEEPING_EMAIL})? (y/N): ").strip().lower()
+                # Skip bookkeeping prompt if already CC'ed
+                skip_bookkeeping = False
+                try:
+                    last_cc = cc_list if 'cc_list' in locals() else []
+                    for b in last_cc:
+                        if b.lower() == BOOKKEEPING_EMAIL.lower():
+                            skip_bookkeeping = True
+                            break
+                except Exception:
+                    pass
+                copy_choice = 'n'
+                if not skip_bookkeeping:
+                    copy_choice = input(f"\nSend a copy to bookkeeping ({BOOKKEEPING_EMAIL})? (y/N): ").strip().lower()
                 if copy_choice == 'y':
                     # reuse invoice number gathered above
                     if 'generated_invoice_number' not in locals() or generated_invoice_number is None:

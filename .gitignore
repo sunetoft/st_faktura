@@ -74,5 +74,16 @@ logs/
 
 # Temporary files
 *.tmp
-*.temp\n# Local history and generated artifacts\n.history/\ninvoices/*.pdf\n
-\nst_faktura.git\n
+*.temp
+
+# Local history and generated artifacts
+.history/
+invoices/*.pdf
+
+st_faktura.git
+
+# Secrets / credentials (ensure not committed)
+service_account.json
+*service_account*.json
+gmail_token.json
+credentials.json
