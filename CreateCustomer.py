@@ -16,7 +16,6 @@ from typing import Dict, List, Optional
 from dotenv import load_dotenv
 
 from google_sheets_client import GoogleSheetsClient, SheetsConfig, extract_spreadsheet_id
-from cvrapi_client.client import CVRApiClient
 
 # Load environment variables
 load_dotenv()
@@ -35,7 +34,7 @@ logger = logging.getLogger(__name__)
 # Customer spreadsheet configuration
 CUSTOMER_SHEET_URL = "https://docs.google.com/spreadsheets/d/170onDFFCveCzV6Q9F1_IhsG2LBRcw5MYxJbyocVJmq0/edit?gid=0#gid=0"
 CUSTOMER_SPREADSHEET_ID = extract_spreadsheet_id(CUSTOMER_SHEET_URL)
-CUSTOMER_SHEET_RANGE = "A:K"  # Extended to include Hosting yearly price (HostPrice) and RenewDate (day.month)
+CUSTOMER_SHEET_RANGE = "Kunder!A:K"  # Extended to include Hosting yearly price (HostPrice) and RenewDate (day.month)
 
 
 class CustomerManager:

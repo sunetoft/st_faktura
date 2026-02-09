@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #141414;
+  background-color: #f7f2e7;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 500px at 20% -10%, #ffe8c2 0%, transparent 60%),
+    radial-gradient(900px 600px at 90% 0%, #d6f1ef 0%, transparent 55%),
+    #f7f2e7;
+  font-family: "Space Grotesk", "Helvetica Neue", Arial, sans-serif;
+}
+
+a {
+  color: inherit;
+}
+
+@layer components {
+  .input {
+    @apply w-full rounded-xl border border-sand/80 bg-white/80 px-4 py-2 text-sm text-ink shadow-soft focus:outline-none focus:ring-2 focus:ring-accent/40;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center rounded-full bg-accent px-5 py-2 text-sm font-semibold text-white shadow-soft transition hover:-translate-y-0.5;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center rounded-full bg-lake px-5 py-2 text-sm font-semibold text-white shadow-soft transition hover:-translate-y-0.5;
+  }
+  .nav-link {
+    @apply flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-ink/70 transition hover:bg-white/70 hover:text-ink;
+  }
+  .nav-link-active {
+    @apply bg-white text-ink shadow-soft;
+  }
+}

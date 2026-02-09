@@ -6,3 +6,6 @@ pandas
 python-dotenv
 reportlab
 PyPDF2
+fastapi
+uvicorn
+google-cloud-storage

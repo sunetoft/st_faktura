@@ -25,8 +25,14 @@ CONTENT_WIDTH = A4[0] - (CONTENT_SIDE_MARGIN * 2)
 logger = logging.getLogger(__name__)
 
 # Invoice configuration
-INVOICE_NUMBERING_FILE = os.path.join(os.getcwd(), 'invoice_numbering.json')
-INVOICES_DIR = os.path.join(os.getcwd(), 'invoices')
+INVOICE_NUMBERING_FILE = os.getenv(
+    'INVOICE_NUMBERING_FILE',
+    os.path.join(os.getcwd(), 'invoice_numbering.json')
+)
+INVOICES_DIR = os.getenv(
+    'INVOICES_DIR',
+    os.path.join(os.getcwd(), 'invoices')
+)
 
 
 class InvoiceNumberManager:
