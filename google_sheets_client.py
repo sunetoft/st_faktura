@@ -41,11 +41,17 @@ class SheetsConfig:
     
     def __init__(self):
         """Initialize configuration from environment variables"""
-        self.service_account_file = os.getenv('SERVICE_ACCOUNT_FILE', 'service_account.json')
+        self.service_account_file = os.getenv('SERVICE_ACCOUNT_FILE') or self._default_service_account_path()
         self.oauth_credentials_file = os.getenv('OAUTH_CREDENTIALS_FILE', 'credentials.json')
         self.oauth_token_file = os.getenv('OAUTH_TOKEN_FILE', 'token.pickle')
         self.log_level = os.getenv('LOG_LEVEL', 'INFO')
         self.log_file = os.getenv('SHEETS_LOG_FILE', 'st_faktura_sheets.log')
+
+    @staticmethod
+    def _default_service_account_path() -> str:
+        if os.path.exists('/secrets/service_account.json'):
+            return '/secrets/service_account.json'
+        return 'service_account.json'
 
 
 class GoogleSheetsClient:
