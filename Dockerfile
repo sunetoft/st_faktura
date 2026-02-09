@@ -1,4 +1,12 @@
 # ST_Faktura - Google Cloud Run Dockerfile
+FROM node:20-slim AS frontend-build
+
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend ./
+RUN npm run build
+
 FROM python:3.11-slim
 
 # Set working directory
@@ -15,6 +23,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
+
+# Copy built frontend assets
+COPY --from=frontend-build /frontend/dist ./frontend/dist
 
 # Create directory for temporary files
 RUN mkdir -p /tmp/invoices

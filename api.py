@@ -6,12 +6,14 @@ import re
 import tempfile
 from urllib.parse import quote
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from PyPDF2 import PdfReader
 
@@ -38,6 +40,12 @@ from storage_utils import (
 )
 
 app = FastAPI(title="ST_Faktura API", version="1.0")
+
+_frontend_dist = Path(__file__).resolve().parent / "frontend" / "dist"
+if _frontend_dist.exists():
+    assets_dir = _frontend_dist / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 _cors_origins = [
     origin.strip()
@@ -182,19 +190,64 @@ class GCSInvoiceNumberManager:
         return current + 1
 
 
+def _format_key_number(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ""
+        raw = raw.replace(",", ".")
+        try:
+            num = float(raw)
+        except ValueError:
+            return value.strip()
+    else:
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return str(value).strip()
+    if num.is_integer():
+        return str(int(num))
+    return f"{num:.2f}".rstrip("0").rstrip(".")
+
+
+def _normalize_key_parts(parts: List[str]) -> List[str]:
+    if len(parts) < 9:
+        return parts
+    normalized = parts[:]
+    normalized[0] = normalized[0].strip()
+    normalized[1] = normalized[1].strip()
+    normalized[2] = normalized[2].strip()
+    normalized[3] = normalized[3].strip()
+    normalized[4] = normalized[4].strip()[:120]
+    normalized[5] = _format_key_number(normalized[5])
+    normalized[6] = _format_key_number(normalized[6])
+    normalized[7] = _format_key_number(normalized[7])
+    normalized[8] = _format_key_number(normalized[8])
+    return normalized
+
+
+def _normalize_key_string(key: str) -> str:
+    parts = key.split("|")
+    normalized = _normalize_key_parts(parts)
+    return "|".join(normalized)
+
+
 def _task_unique_key(task: Dict[str, Any]) -> str:
     parts = [
-        str(task.get("customer_name", "")).strip(),
-        str(task.get("date", "")).strip(),
-        str(task.get("tasktype", "")).strip(),
-        str(task.get("pricing_type", "")).strip(),
-        str(task.get("description", "")).strip()[:120],
-        str(task.get("time_minutes", "")).strip(),
-        str(task.get("price", "")).strip(),
-        str(task.get("discount_percentage", "")).strip(),
-        str(task.get("sum", "")).strip(),
+        str(task.get("customer_name", "")),
+        str(task.get("date", "")),
+        str(task.get("tasktype", "")),
+        str(task.get("pricing_type", "")),
+        str(task.get("description", "")),
+        str(task.get("time_minutes", "")),
+        str(task.get("price", "")),
+        str(task.get("discount_percentage", "")),
+        str(task.get("sum", "")),
     ]
-    return "|".join(parts)
+    normalized = _normalize_key_parts(parts)
+    return "|".join(normalized)
 
 
 def _load_invoiced_tasks(bucket: str, blob_name: str) -> Dict[str, Dict[str, str]]:
@@ -239,7 +292,13 @@ def _record_invoiced_tasks(
 
 def _load_invoiced_tasks_safe() -> Dict[str, Dict[str, str]]:
     bucket, invoiced_blob = _get_invoiced_tasks_blob()
-    return _load_invoiced_tasks(bucket, invoiced_blob)
+    raw = _load_invoiced_tasks(bucket, invoiced_blob)
+    normalized: Dict[str, Dict[str, str]] = {}
+    for key, meta in raw.items():
+        normalized_key = _normalize_key_string(key)
+        if normalized_key not in normalized:
+            normalized[normalized_key] = meta
+    return normalized
 
 
 def _annotate_tasks_with_invoiced(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -416,7 +475,11 @@ def healthz() -> Dict[str, str]:
 
 @app.get("/", response_class=HTMLResponse)
 def root() -> HTMLResponse:
-        html = """
+    index_path = _frontend_dist / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+
+    html = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -545,12 +608,17 @@ def root() -> HTMLResponse:
 </body>
 </html>
 """
-        return HTMLResponse(content=html)
+    return HTMLResponse(content=html)
 
 
 @app.get("/favicon.ico")
 def favicon() -> Dict[str, str]:
+    icon_path = _frontend_dist / "favicon.ico"
+    if icon_path.exists():
+        return FileResponse(icon_path)
     return {"status": "ok"}
+
+
 
 
 @app.get("/api/health")
@@ -829,7 +897,8 @@ def update_task(row_index: int, payload: UpdateTaskRequest) -> Dict[str, Any]:
         [updated_row],
     )
 
-    if payload.invoice_status and payload.invoice_status.lower() == "open":
+    if payload.invoice_status:
+        status_value = payload.invoice_status.lower()
         keys = {
             _task_unique_key(existing),
             _task_unique_key(updated_task),
@@ -838,7 +907,11 @@ def update_task(row_index: int, payload: UpdateTaskRequest) -> Dict[str, Any]:
             bucket, invoiced_blob = _get_invoiced_tasks_blob()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"GCS not configured for invoiced tasks: {exc}") from exc
-        _remove_invoiced_task_keys_gcs(bucket, invoiced_blob, keys)
+        if status_value == "open":
+            _remove_invoiced_task_keys_gcs(bucket, invoiced_blob, keys)
+        elif status_value == "invoiced":
+            _remove_invoiced_task_keys_gcs(bucket, invoiced_blob, keys)
+            _record_invoiced_tasks(bucket, invoiced_blob, [updated_task], 0)
     return {"status": "updated"}
 
 
@@ -1119,3 +1192,15 @@ def update_company_details(payload: UpdateCompanyDetailsRequest) -> Dict[str, An
     if not ok:
         raise HTTPException(status_code=400, detail="Failed to update company details")
     return {"status": "updated"}
+
+
+@app.get("/{full_path:path}")
+def spa_fallback(full_path: str) -> HTMLResponse:
+    index_path = _frontend_dist / "index.html"
+    if not index_path.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    candidate = (_frontend_dist / full_path).resolve()
+    if candidate.is_file() and str(candidate).startswith(str(_frontend_dist)):
+        return FileResponse(candidate)
+    return FileResponse(index_path)

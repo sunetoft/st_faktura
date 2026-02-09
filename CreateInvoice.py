@@ -309,27 +309,14 @@ class InvoiceManager:
                 logger.error("SENDER_EMAIL not configured in environment variables")
                 return False
             
-            access_token = None
-            if auth_method == 'oauth':
-                try:
-                    from gmail_oauth import get_gmail_access_token
-                    access_token = get_gmail_access_token(sender_email)
-                    if not access_token:
-                        self.last_email_error = "Failed to obtain Gmail OAuth access token"
-                        logger.error("Failed to obtain Gmail OAuth access token")
-                        return False
-                except ImportError:
-                    self.last_email_error = "gmail_oauth module not found"
-                    logger.error("gmail_oauth module not found. Cannot use OAuth method.")
-                    return False
-            elif auth_method == 'password':
-                if not sender_password:
-                    self.last_email_error = "SENDER_PASSWORD missing for password auth"
-                    logger.error("SENDER_PASSWORD missing for password auth. Set EMAIL_AUTH_METHOD=oauth to use OAuth instead.")
-                    return False
-            else:
-                self.last_email_error = f"Unknown EMAIL_AUTH_METHOD '{auth_method}'"
-                logger.error(f"Unknown EMAIL_AUTH_METHOD '{auth_method}'. Use 'password' or 'oauth'.")
+            if auth_method != 'password':
+                self.last_email_error = "EMAIL_AUTH_METHOD must be 'password'"
+                logger.error("OAuth email auth is not supported in this app. Use an app password.")
+                return False
+
+            if not sender_password:
+                self.last_email_error = "SENDER_PASSWORD missing for password auth"
+                logger.error("SENDER_PASSWORD missing for password auth. Use a Gmail app password.")
                 return False
             
             # Create message
@@ -379,13 +366,7 @@ ST_Faktura
             server.ehlo()
             server.starttls()
             server.ehlo()
-            if auth_method == 'oauth':
-                # XOAUTH2 authentication
-                import base64
-                auth_string = f"user={sender_email}\x01auth=Bearer {access_token}\x01\x01".encode('utf-8')
-                server.docmd('AUTH', 'XOAUTH2 ' + base64.b64encode(auth_string).decode('utf-8'))
-            else:
-                server.login(sender_email, sender_password)
+            server.login(sender_email, sender_password)
             text = msg.as_string()
             # Aggregate all recipients (To + CC)
             all_recipients = [customer_email] + cc_emails_clean
@@ -739,7 +720,7 @@ def upload_to_drive(
             msg = (
                 "Could not upload invoice to Google Drive using a service account.\n"
                 "- If you intended a Shared Drive: set GOOGLE_DRIVE_SHARED_DRIVE_ID and add the service account as a member.\n"
-                "- Otherwise switch to OAuth user credentials (AUTH_METHOD=oauth)."
+                "- Otherwise share the destination folder with the service account."
             )
             print(f"ERROR: {msg}")
             logger.error(msg.replace('Could not upload', 'ERROR: Could not upload'))

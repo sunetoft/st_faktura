@@ -134,8 +134,8 @@ python setup_credentials.py
 ```
 
 Choose between:
-- **Service Account** (recommended for automated scripts and server deployments)
-- **OAuth 2.0** (for user-interactive applications)
+- **Service Account** (recommended and required for Cloud Run)
+- **OAuth 2.0** (desktop/local only; not suitable for Cloud Run)
 
 ### 3. Configure Google Cloud Console
 
@@ -149,7 +149,7 @@ Choose between:
 7. Rename it to `service_account.json` and place in project folder
 8. **Important**: Share your Google Sheet with the service account email (found in the JSON file)
 
-#### For OAuth 2.0:
+#### For OAuth 2.0 (local only):
 1. Go to [Google Cloud Console](https://console.cloud.google.com)
 2. Create a new project or select existing one
 3. Enable Google Sheets API
@@ -158,7 +158,12 @@ Choose between:
 6. Download the JSON file
 7. Rename it to `credentials.json` and place in project folder
 
-### 4. Run the Example
+### 4. Email Authentication
+
+Email sending uses SMTP with a Gmail app password. OAuth email auth is not supported
+in the Cloud Run deployment. Set `SENDER_EMAIL` and `SENDER_PASSWORD` in your `.env`.
+
+### 5. Run the Example
 
 ```bash
 python st_faktura_sheets.py
