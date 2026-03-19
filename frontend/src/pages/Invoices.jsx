@@ -167,7 +167,7 @@ export default function Invoices() {
         </button>
         <input className="input" placeholder="CC emails (comma separated)" value={form.cc_emails} onChange={update("cc_emails")} />
         <div className="flex items-center gap-2">
-          <label className="text-sm text-ink/70">CC bookkeeping (indtaegt@ebogholderen.dk)</label>
+          <label className="text-sm text-ink/70">CC bookkeeping (341bilag2401129@e-conomic.dk)</label>
           <input type="checkbox" checked={form.cc_bookkeeping} onChange={update("cc_bookkeeping")} />
         </div>
         <div className="flex items-center gap-2">

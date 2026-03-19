@@ -50,7 +50,7 @@ COMPANY_DETAILS_SHEET_RANGE = "Company Details!A2:L2"  # Single company details 
 # Company details file
 COMPANY_DETAILS_FILE = os.path.join(os.getcwd(), 'st-faktura.json')
 INVOICED_TASKS_FILE = os.path.join(os.getcwd(), 'invoiced_tasks.json')
-BOOKKEEPING_EMAIL = os.getenv('BOOKKEEPING_EMAIL', 'indtaegt@ebogholderen.dk')
+BOOKKEEPING_EMAIL = os.getenv('BOOKKEEPING_EMAIL', '341bilag2401129@e-conomic.dk')
 
 
 class InvoiceManager:

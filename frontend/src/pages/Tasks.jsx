@@ -705,7 +705,7 @@ export default function Tasks() {
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
               <label className="flex items-center gap-2 text-sm text-ink/70">
                 <input type="checkbox" checked={ccBookkeeping} onChange={(event) => setCcBookkeeping(event.target.checked)} />
-                CC bookkeeping (indtaegt@ebogholderen.dk)
+                CC bookkeeping (341bilag2401129@e-conomic.dk)
               </label>
               <button className="btn" type="button" onClick={sendInvoice} disabled={sendLoading}>
                 {sendLoading ? "Sending..." : "Send invoice"}

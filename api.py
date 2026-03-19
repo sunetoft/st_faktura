@@ -20,8 +20,8 @@ from PyPDF2 import PdfReader
 # Load environment variables from .env if present.
 load_dotenv()
 
-# Ensure temp-friendly defaults before importing invoice utilities.
-os.environ.setdefault("INVOICES_DIR", "/tmp/invoices")
+# Ensure persistent-storage defaults before importing invoice utilities.
+os.environ.setdefault("INVOICES_DIR", "/opt/st_faktura/Fakturaer")
 os.environ.setdefault("INVOICE_NUMBERING_FILE", "/tmp/invoice_numbering.json")
 
 from google_sheets_client import GoogleSheetsClient
@@ -819,7 +819,12 @@ def search_tasks(
 ) -> Dict[str, Any]:
     client = get_sheets_client()
     tasks = _load_tasks_sheet(client)
-    customer_tasks = [task for task in tasks if str(task.get("customer_name", "")).strip() == customer_name]
+    normalized_customer_name = customer_name.strip()
+    customer_tasks = [
+        task
+        for task in tasks
+        if str(task.get("customer_name", "")).strip() == normalized_customer_name
+    ]
     filtered = _filter_tasks_by_date(customer_tasks, start_date, end_date)
     return {"tasks": _annotate_tasks_with_invoiced(filtered)}
 
@@ -1000,7 +1005,6 @@ def create_invoice(payload: CreateInvoiceRequest) -> Dict[str, Any]:
             detail = getattr(invoice_manager, "last_email_error", None) or "Failed to send invoice email"
             raise HTTPException(status_code=502, detail=detail)
 
-    gcs_uri = None
     drive_uploaded = False
     drive_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "").strip() or None
     if drive_folder_id:
@@ -1010,7 +1014,7 @@ def create_invoice(payload: CreateInvoiceRequest) -> Dict[str, Any]:
 
     return {
         "invoice_number": next_number,
-        "pdf_uri": gcs_uri,
+        "pdf_uri": pdf_path,
         "emailed": emailed,
         "drive_uploaded": drive_uploaded,
     }
@@ -1018,18 +1022,15 @@ def create_invoice(payload: CreateInvoiceRequest) -> Dict[str, Any]:
 
 @app.get("/invoice-number")
 def get_invoice_number() -> Dict[str, Any]:
-    try:
-        bucket = get_env_bucket()
-        prefix = get_env_prefix()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"GCS not configured for invoice numbering: {exc}") from exc
+    bucket = get_env_bucket()
+    prefix = get_env_prefix()
     number_blob = f"{prefix}/state/invoice_numbering.json"
     data = read_json_from_gcs(bucket, number_blob, default={})
     current = int(data.get("current_invoice_number", 784))
     return {
         "current_invoice_number": current,
         "next_invoice_number": current + 1,
-        "source": "gcs",
+        "source": "local",
     }
 
 
@@ -1038,17 +1039,14 @@ def set_invoice_number(payload: UpdateInvoiceNumberRequest) -> Dict[str, Any]:
     if payload.next_invoice_number < 1:
         raise HTTPException(status_code=400, detail="next_invoice_number must be >= 1")
     current = payload.next_invoice_number - 1
-    try:
-        bucket = get_env_bucket()
-        prefix = get_env_prefix()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"GCS not configured for invoice numbering: {exc}") from exc
+    bucket = get_env_bucket()
+    prefix = get_env_prefix()
     number_blob = f"{prefix}/state/invoice_numbering.json"
     write_json_to_gcs(bucket, number_blob, {"current_invoice_number": current})
     return {
         "current_invoice_number": current,
         "next_invoice_number": payload.next_invoice_number,
-        "source": "gcs",
+        "source": "local",
     }
 
 
@@ -1113,65 +1111,38 @@ def search_invoices(
     flags = 0 if case_sensitive else re.IGNORECASE
     pattern = re.compile(query if regex else re.escape(query), flags)
 
-    local_dir = os.getenv("LOCAL_INVOICES_DIR", "Fakturaer").strip()
-    if local_dir and os.path.isdir(local_dir):
-        base_dir = os.path.abspath(local_dir)
-        results: List[Dict[str, Any]] = []
-        for root, _dirs, files in os.walk(local_dir):
-            for filename in files:
-                if not filename.lower().endswith(".pdf"):
-                    continue
-                local_path = os.path.join(root, filename)
-                rel_path = os.path.relpath(local_path, base_dir)
-                url_path = quote(rel_path.replace(os.sep, "/"))
-                updated = datetime.fromtimestamp(os.path.getmtime(local_path))
-                matches = _search_pdf_text(local_path, pattern)
-                if matches:
-                    results.append(
-                        {
-                            "file": local_path,
-                            "name": filename,
-                            "url": f"/invoices/local/{url_path}",
-                            "date": updated.isoformat(),
-                            "matches": matches,
-                        }
-                    )
-        return {"results": results, "source": "local"}
-
-    try:
-        bucket = get_env_bucket()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    prefix = get_env_prefix()
-    pdf_prefix = f"{prefix}/invoices/"
-
+    invoices_dir = os.getenv("INVOICES_DIR", "/opt/st_faktura/Fakturaer").strip()
+    if not os.path.isdir(invoices_dir):
+        os.makedirs(invoices_dir, exist_ok=True)
+    base_dir = os.path.abspath(invoices_dir)
     results: List[Dict[str, Any]] = []
-    for blob in list_blob_objects(bucket, pdf_prefix):
-        if not blob.name.lower().endswith(".pdf"):
-            continue
-        with tempfile.TemporaryDirectory() as tmpdir:
-            local_path = os.path.join(tmpdir, os.path.basename(blob.name))
-            download_blob_to_path(bucket, blob.name, local_path)
+    for root, _dirs, files in os.walk(invoices_dir):
+        for filename in files:
+            if not filename.lower().endswith(".pdf"):
+                continue
+            local_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(local_path, base_dir)
+            url_path = quote(rel_path.replace(os.sep, "/"))
+            updated = datetime.fromtimestamp(os.path.getmtime(local_path))
             matches = _search_pdf_text(local_path, pattern)
             if matches:
-                updated = blob.updated.isoformat() if blob.updated else None
                 results.append(
                     {
-                        "blob": blob.name,
-                        "name": os.path.basename(blob.name),
-                        "date": updated,
+                        "file": local_path,
+                        "name": filename,
+                        "url": f"/invoices/local/{url_path}",
+                        "date": updated.isoformat(),
                         "matches": matches,
                     }
                 )
-
-    return {"results": results, "source": "gcs"}
+    return {"results": results, "source": "local"}
 
 
 @app.get("/invoices/local/{file_path:path}")
 def get_local_invoice(file_path: str) -> FileResponse:
-    local_dir = os.getenv("LOCAL_INVOICES_DIR", "Fakturaer").strip()
+    local_dir = os.getenv("INVOICES_DIR", "/opt/st_faktura/Fakturaer").strip()
     if not local_dir:
-        raise HTTPException(status_code=404, detail="Local invoices directory not configured")
+        raise HTTPException(status_code=404, detail="Invoices directory not configured")
 
     base_dir = os.path.abspath(local_dir)
     target_path = os.path.abspath(os.path.join(base_dir, file_path))
