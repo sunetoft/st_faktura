@@ -58,7 +58,12 @@ class InvoiceManager:
     Manages invoice operations following clean architecture principles
     """
     
-    def __init__(self, sheets_client: GoogleSheetsClient):
+    def __init__(
+        self,
+        sheets_client: GoogleSheetsClient,
+        invoice_number_manager: Optional[InvoiceNumberManager] = None,
+        pdf_generator: Optional[InvoicePDFGenerator] = None
+    ):
         """
         Initialize invoice manager
         
@@ -67,8 +72,9 @@ class InvoiceManager:
         """
         self.sheets_client = sheets_client
         self.spreadsheet_id = SPREADSHEET_ID
-        self.invoice_number_manager = InvoiceNumberManager()
-        self.pdf_generator = InvoicePDFGenerator()
+        self.invoice_number_manager = invoice_number_manager or InvoiceNumberManager()
+        self.pdf_generator = pdf_generator or InvoicePDFGenerator()
+        self.last_email_error: Optional[str] = None
         
     def get_customers(self) -> List[Dict[str, str]]:
         """
@@ -290,34 +296,41 @@ class InvoiceManager:
             True if successful, False otherwise
         """
         try:
+            self.last_email_error = None
             # Email configuration from environment variables
             smtp_server = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
             smtp_port = int(os.getenv('SMTP_PORT', '587'))
             sender_email = os.getenv('SENDER_EMAIL', '')
             auth_method = os.getenv('EMAIL_AUTH_METHOD', 'password').lower()
-            sender_password = os.getenv('SENDER_PASSWORD', '') if auth_method == 'password' else ''
+            sender_password_raw = os.getenv('SENDER_PASSWORD', '') if auth_method == 'password' else ''
+            if sender_password_raw.startswith('"') and sender_password_raw.endswith('"') and len(sender_password_raw) >= 2:
+                sender_password_raw = sender_password_raw[1:-1]
+            elif sender_password_raw.startswith("'") and sender_password_raw.endswith("'") and len(sender_password_raw) >= 2:
+                sender_password_raw = sender_password_raw[1:-1]
+            sender_password = ''.join(sender_password_raw.split()) if auth_method == 'password' else ''
             
             if not sender_email:
+                self.last_email_error = "SENDER_EMAIL not configured"
                 logger.error("SENDER_EMAIL not configured in environment variables")
                 return False
             
-            access_token = None
-            if auth_method == 'oauth':
-                try:
-                    from gmail_oauth import get_gmail_access_token
-                    access_token = get_gmail_access_token(sender_email)
-                    if not access_token:
-                        logger.error("Failed to obtain Gmail OAuth access token")
-                        return False
-                except ImportError:
-                    logger.error("gmail_oauth module not found. Cannot use OAuth method.")
-                    return False
-            elif auth_method == 'password':
-                if not sender_password:
-                    logger.error("SENDER_PASSWORD missing for password auth. Set EMAIL_AUTH_METHOD=oauth to use OAuth instead.")
-                    return False
-            else:
-                logger.error(f"Unknown EMAIL_AUTH_METHOD '{auth_method}'. Use 'password' or 'oauth'.")
+            if auth_method != 'password':
+                self.last_email_error = "EMAIL_AUTH_METHOD must be 'password'"
+                logger.error("OAuth email auth is not supported in this app. Use an app password.")
+                return False
+
+            if not sender_password:
+                self.last_email_error = "SENDER_PASSWORD missing for password auth"
+                logger.error("SENDER_PASSWORD missing for password auth. Use a Gmail app password.")
+                return False
+
+            # Gmail app passwords are sometimes entered in grouped form (e.g. "abcd efgh ...").
+            sender_password = sender_password.replace(" ", "")
+
+            # Guard against default placeholder values from .env templates.
+            if sender_email.startswith("REPLACE_WITH_") or sender_password.startswith("REPLACE_WITH_"):
+                self.last_email_error = "SMTP credentials are placeholders. Set real SENDER_EMAIL and SENDER_PASSWORD in .env"
+                logger.error(self.last_email_error)
                 return False
             
             # Create message
@@ -367,13 +380,7 @@ ST_Faktura
             server.ehlo()
             server.starttls()
             server.ehlo()
-            if auth_method == 'oauth':
-                # XOAUTH2 authentication
-                import base64
-                auth_string = f"user={sender_email}\x01auth=Bearer {access_token}\x01\x01".encode('utf-8')
-                server.docmd('AUTH', 'XOAUTH2 ' + base64.b64encode(auth_string).decode('utf-8'))
-            else:
-                server.login(sender_email, sender_password)
+            server.login(sender_email, sender_password)
             text = msg.as_string()
             # Aggregate all recipients (To + CC)
             all_recipients = [customer_email] + cc_emails_clean
@@ -384,6 +391,7 @@ ST_Faktura
             return True
             
         except Exception as e:
+            self.last_email_error = str(e)
             logger.error(f"Failed to send invoice email: {e}")
             return False
 
@@ -641,7 +649,11 @@ def record_invoiced_tasks(tasks: List[Dict[str, str]], invoice_number: int) -> N
     _save_invoiced_tasks(invoiced)
     logger.info(f"Recorded {len(tasks)} tasks as invoiced (invoice #{invoice_number})")
 
-def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
+def upload_to_drive(
+    file_path: str,
+    folder_name: str = 'stfaktura',
+    folder_id: Optional[str] = None,
+) -> bool:
     """Upload a file to Google Drive or a Shared Drive folder.
 
     Shared Drive handling:
@@ -655,7 +667,12 @@ def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
         from googleapiclient.http import MediaFileUpload
 
         shared_drive_id = os.getenv('GOOGLE_DRIVE_SHARED_DRIVE_ID', '').strip() or None
-        keyfile = os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE', 'service_account.json')
+        keyfile = (
+            os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE')
+            or os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+            or os.getenv('SERVICE_ACCOUNT_FILE')
+            or 'service_account.json'
+        )
         SCOPES = ['https://www.googleapis.com/auth/drive.file']
         creds = service_account.Credentials.from_service_account_file(keyfile, scopes=SCOPES)
         drive_service = build('drive', 'v3', credentials=creds, cache_discovery=False)
@@ -677,21 +694,22 @@ def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
                     fields='files(id)'
                 ).execute().get('files', [])
 
-        folders = list_folders()
-        if folders:
-            folder_id = folders[0]['id']
-        else:
-            meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
-            if shared_drive_id:
-                # For creation in a Shared Drive, parent must be the shared drive root (supply parents=[shared_drive_id])
-                meta['parents'] = [shared_drive_id]
-            folder = drive_service.files().create(
-                body=meta,
-                fields='id',
-                supportsAllDrives=bool(shared_drive_id)
-            ).execute()
-            folder_id = folder.get('id')
-            logger.info(f"Created folder '{folder_name}' (id={folder_id}) in {'Shared Drive' if shared_drive_id else 'My Drive'}")
+        if not folder_id:
+            folders = list_folders()
+            if folders:
+                folder_id = folders[0]['id']
+            else:
+                meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+                if shared_drive_id:
+                    # For creation in a Shared Drive, parent must be the shared drive root (supply parents=[shared_drive_id])
+                    meta['parents'] = [shared_drive_id]
+                folder = drive_service.files().create(
+                    body=meta,
+                    fields='id',
+                    supportsAllDrives=bool(shared_drive_id)
+                ).execute()
+                folder_id = folder.get('id')
+                logger.info(f"Created folder '{folder_name}' (id={folder_id}) in {'Shared Drive' if shared_drive_id else 'My Drive'}")
 
         file_meta = {'name': os.path.basename(file_path), 'parents': [folder_id]}
         media = MediaFileUpload(file_path, mimetype='application/pdf')
@@ -699,9 +717,10 @@ def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
             body=file_meta,
             media_body=media,
             fields='id',
-            supportsAllDrives=bool(shared_drive_id)
+            supportsAllDrives=bool(shared_drive_id or folder_id)
         ).execute()
         logger.info(f"Uploaded '{os.path.basename(file_path)}' to folder '{folder_name}' ({'Shared Drive' if shared_drive_id else 'My Drive'})")
+        return True
 
     except HttpError as e:
         status = getattr(e, 'resp', {}).status if hasattr(e, 'resp') else 'unknown'
@@ -715,22 +734,33 @@ def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
             msg = (
                 "Could not upload invoice to Google Drive using a service account.\n"
                 "- If you intended a Shared Drive: set GOOGLE_DRIVE_SHARED_DRIVE_ID and add the service account as a member.\n"
-                "- Otherwise switch to OAuth user credentials (AUTH_METHOD=oauth)."
+                "- Otherwise share the destination folder with the service account."
             )
             print(f"ERROR: {msg}")
             logger.error(msg.replace('Could not upload', 'ERROR: Could not upload'))
+            return False
         elif status == 404 or reason == 'notFound':
-            msg = (
-                f"Shared Drive not found or inaccessible (ID={shared_drive_id}).\n"
-                "- Verify the ID (it's from the URL of the shared drive).\n"
-                "- Ensure the service account has at least Content Manager access."
-            )
+            if shared_drive_id:
+                msg = (
+                    f"Shared Drive not found or inaccessible (ID={shared_drive_id}).\n"
+                    "- Verify the ID (it's from the URL of the shared drive).\n"
+                    "- Ensure the service account has at least Content Manager access."
+                )
+            else:
+                msg = (
+                    f"Drive folder not found or inaccessible (folder_id={folder_id}).\n"
+                    "- Verify GOOGLE_DRIVE_FOLDER_ID is correct.\n"
+                    "- Share that folder with the service account email."
+                )
             print(f"ERROR: {msg}")
-            logger.error(msg.replace('Shared Drive not found', 'ERROR: Shared Drive not found'))
+            logger.error(f"ERROR: {msg}")
+            return False
         else:
             logger.error(f"Drive upload failed (HTTP {status}) reason={reason}: {e}")
+            return False
     except Exception as e:
         logger.error(f"Failed to upload to Drive: {e}")
+        return False
 
 
 def Credit_memo() -> bool:
@@ -929,7 +959,8 @@ def main() -> None:
         
         print(f"✅ Invoice PDF generated: {pdf_path}")
         # Save a copy to Google Drive
-        upload_to_drive(pdf_path)
+        if not upload_to_drive(pdf_path):
+            print("❌ Failed to upload invoice PDF to Google Drive")
         # Extract invoice number to record tasks
         import re
         match = re.search(r'faktura_(\d+)_', pdf_path)

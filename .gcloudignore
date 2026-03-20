@@ -1,0 +1,49 @@
+# Cloud Build ignore rules (override .gitignore)
+.git/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.sqlite
+.env
+.env.*
+
+# Python build artifacts
+build/
+dist/
+.eggs/
+*.egg-info/
+
+# Local files
+.vscode/
+.idea/
+.DS_Store
+
+# Large local data
+Fakturaer/
+invoices/
+frontend/node_modules/
+
+# Binary blobs
+*.pdf
+*.zip
+*.gz
+*.tgz
+*.tar
+*.rar
+*.7z
+*.mp4
+*.mov
+*.avi
+*.mp3
+*.wav
+*.bin
+
+# Secrets
+service_account.json
+*service_account*.json
+gmail_token.json
+credentials.json

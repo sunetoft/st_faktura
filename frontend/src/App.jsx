@@ -70,7 +70,7 @@ function App() {
         <Route path="/customers" element={<Customers />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/invoices" element={<Invoices />} />
-        <Route path="/create-invoice" element={<CreateInvoice />} />
+          <Route path="/create-invoice" element={<CreateInvoice />} />
         <Route path="/search" element={<InvoiceSearch />} />
         <Route path="/company" element={<Company />} />
         <Route path="/manage" element={<Manage />} />

@@ -6,3 +6,5 @@ pandas
 python-dotenv
 reportlab
 PyPDF2
+fastapi
+uvicorn
