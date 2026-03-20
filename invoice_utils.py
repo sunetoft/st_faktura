@@ -25,14 +25,8 @@ CONTENT_WIDTH = A4[0] - (CONTENT_SIDE_MARGIN * 2)
 logger = logging.getLogger(__name__)
 
 # Invoice configuration
-INVOICE_NUMBERING_FILE = os.getenv(
-    'INVOICE_NUMBERING_FILE',
-    os.path.join(os.getcwd(), 'invoice_numbering.json')
-)
-INVOICES_DIR = os.getenv(
-    'INVOICES_DIR',
-    os.path.join(os.getcwd(), 'invoices')
-)
+INVOICE_NUMBERING_FILE = os.path.join(os.getcwd(), 'invoice_numbering.json')
+INVOICES_DIR = os.path.join(os.getcwd(), 'invoices')
 
 
 class InvoiceNumberManager:
@@ -260,7 +254,8 @@ class InvoicePDFGenerator:
 
         try:
             invoice_date = datetime.now()
-            filename = f"faktura_{invoice_number}_{invoice_date.strftime('%Y%m%d')}.pdf"
+            filename_prefix = 'kreditnota' if credit_memo else 'faktura'
+            filename = f"{filename_prefix}_{invoice_number}_{invoice_date.strftime('%Y%m%d')}.pdf"
             filepath = os.path.join(INVOICES_DIR, filename)
             logger.info(f"Generating invoice PDF (new layout): {filename}")
             doc = SimpleDocTemplate(
@@ -272,7 +267,7 @@ class InvoicePDFGenerator:
                 bottomMargin=2.0*cm
             )
             story = []
-            story.append(self._create_new_header(invoice_number, invoice_date, company_details, customer_details))
+            story.append(self._create_new_header(invoice_number, invoice_date, company_details, customer_details, credit_memo=credit_memo))
             # Thin horizontal rule under header
             from reportlab.platypus import Table as RLTable
             rule_table = RLTable([[" "]], colWidths=[CONTENT_WIDTH], rowHeights=[2])
@@ -292,7 +287,7 @@ class InvoicePDFGenerator:
             story.append(Spacer(1, 18))  # More space between title and items table per request
             story.append(self._create_new_items_table(tasks, company_details))
             story.append(Spacer(1, 25))
-            story.append(self._create_payment_section(company_details, invoice_date, invoice_number))
+            story.append(self._create_payment_section(company_details, invoice_date, invoice_number, credit_memo=credit_memo))
             def add_page_elements(canvas, doc):
                 self._draw_page_elements(canvas, doc, company_details)
             doc.build(story, onFirstPage=add_page_elements, onLaterPages=add_page_elements)
@@ -302,7 +297,7 @@ class InvoicePDFGenerator:
             logger.error(f"Failed to generate invoice PDF: {e}")
             raise
 
-    def _create_new_header(self, invoice_number: int, invoice_date: datetime, company_details: Dict[str, str], customer_details: Dict[str, str]) -> Table:
+    def _create_new_header(self, invoice_number: int, invoice_date: datetime, company_details: Dict[str, str], customer_details: Dict[str, str], credit_memo: bool = False) -> Table:
         # Unified content width based on left/right page margins (2cm each) => usable width ~ (A4 width - 4cm)
         total_content_width = CONTENT_WIDTH
         # Allocate a fixed right column width for the meta/logo block; remaining width for customer block
@@ -338,9 +333,11 @@ class InvoicePDFGenerator:
             brand_block_flowables.append(Paragraph(f"<font size='20'><b>{logo_text}</b></font>", self.styles['CompanyDetails']))
 
         # Add meta info (date + number)
+        date_label = 'Kreditnotadato' if credit_memo else 'Fakturadato'
+        number_label = 'Kreditnotanr.' if credit_memo else 'Fakturanr.'
         meta_html = (
-            f"<para alignment='right'>Fakturadato: {invoice_date.strftime('%d.%m.%Y')}<br/>"
-            f"Fakturanr.: {invoice_number}</para>"
+            f"<para alignment='right'>{date_label}: {invoice_date.strftime('%d.%m.%Y')}<br/>"
+            f"{number_label}: {invoice_number}</para>"
         )
         brand_block_flowables.append(Paragraph(meta_html, self.styles['InvoiceInfo']))
 
@@ -480,7 +477,7 @@ class InvoicePDFGenerator:
             logger.warning(f"Failed applying row stripes: {e}")
         return table
     
-    def _create_payment_section(self, company_details: Dict[str, str], invoice_date: datetime, invoice_number: int) -> Table:
+    def _create_payment_section(self, company_details: Dict[str, str], invoice_date: datetime, invoice_number: int, credit_memo: bool = False) -> Table:
         """Create payment terms and banking information section
 
         Priority for payment terms days:
@@ -515,10 +512,15 @@ class InvoicePDFGenerator:
             parts = [p.strip() for p in bank_account.split('/')]
             if len(parts) == 2 and parts[0].replace(' ', '').isdigit():
                 regnr = parts[0]
-        payment_info = f"""<b>Betalingsbetingelser:</b> Netto {payment_terms_days} dage - forfalden {due_date.strftime('%d.%m.%Y')}<br/>
-Beløbet indbetales til vor bank. <b>{bank_name}</b>{f' - Regnr.: <b>{regnr}</b>' if regnr else ''}{f' / Kontonr.: <b>{bank_account}</b>' if bank_account else ''}<br/>
-Fakturanr. <b>{invoice_number}</b> bedes anført ved bankoverførsel<br/><br/>
-<i>Ved for sen betaling påregnes rente i henhold til gældende lovgivning.</i>"""
+        if credit_memo:
+            payment_info = f"""<b>Kreditnota:</b> Denne kreditnota vedrører refusion/korrektion af tidligere fakturering.<br/>
+    Kreditnotanr. <b>{invoice_number}</b> bedes anført ved bogføring.<br/>
+    Udstedelsesdato: <b>{invoice_date.strftime('%d.%m.%Y')}</b>"""
+        else:
+            payment_info = f"""<b>Betalingsbetingelser:</b> Netto {payment_terms_days} dage - forfalden {due_date.strftime('%d.%m.%Y')}<br/>
+    Beløbet indbetales til vor bank. <b>{bank_name}</b>{f' - Regnr.: <b>{regnr}</b>' if regnr else ''}{f' / Kontonr.: <b>{bank_account}</b>' if bank_account else ''}<br/>
+    Fakturanr. <b>{invoice_number}</b> bedes anført ved bankoverførsel<br/><br/>
+    <i>Ved for sen betaling påregnes rente i henhold til gældende lovgivning.</i>"""
         
         # Create payment section
         payment_data = [

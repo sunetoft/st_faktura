@@ -210,6 +210,24 @@ export default function Dashboard() {
     return openTasks.reduce((sum, task) => sum + parseAmount(task?.sum), 0);
   }, [openTasks]);
 
+  const customerTaskStatus = useMemo(() => {
+    const totals = new Map();
+    tasks.forEach((task) => {
+      const customerName = `${task?.customer_name || "Unknown"}`.trim() || "Unknown";
+      const current = totals.get(customerName) || { invoicedCount: 0, openCount: 0 };
+      if (task?.invoiced) {
+        current.invoicedCount += 1;
+      } else {
+        current.openCount += 1;
+      }
+      totals.set(customerName, current);
+    });
+
+    return Array.from(totals.entries())
+      .map(([customerName, counts]) => ({ customerName, ...counts }))
+      .sort((a, b) => a.customerName.localeCompare(b.customerName, "da"));
+  }, [tasks]);
+
   return (
     <div className="space-y-6">
       <header className="space-y-2">
@@ -409,6 +427,51 @@ export default function Dashboard() {
             </p>
           </div>
         </StatWidget>
+        <div className="lg:col-span-2 xl:col-span-3">
+          <StatWidget
+            title="Customer task status"
+            description="Number of invoiced and open tasks per customer."
+          >
+            <div className="overflow-x-auto rounded-2xl border border-sand/80 bg-white/70">
+              <table className="min-w-full text-left text-sm">
+                <thead className="bg-white/90 text-xs uppercase tracking-wide text-ink/60">
+                  <tr>
+                    <th className="px-4 py-3">Customer</th>
+                    <th className="px-4 py-3 text-right">Invoiced tasks</th>
+                    <th className="px-4 py-3 text-right">Open tasks</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-sand/60">
+                  {loading ? (
+                    <tr>
+                      <td className="px-4 py-6 text-center text-ink/60" colSpan={3}>
+                        Loading customer status...
+                      </td>
+                    </tr>
+                  ) : customerTaskStatus.length ? (
+                    customerTaskStatus.map((item) => (
+                      <tr key={item.customerName} className="hover:bg-white/70">
+                        <td className="px-4 py-3 font-semibold text-ink">{item.customerName}</td>
+                        <td className="px-4 py-3 text-right text-ink/80">
+                          {item.invoicedCount.toLocaleString("da-DK")}
+                        </td>
+                        <td className="px-4 py-3 text-right text-ink/80">
+                          {item.openCount.toLocaleString("da-DK")}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td className="px-4 py-6 text-center text-ink/60" colSpan={3}>
+                        No task data available.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </StatWidget>
+        </div>
       </div>
     </div>
   );

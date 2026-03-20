@@ -3,6 +3,7 @@ import Dashboard from "./pages/Dashboard";
 import Customers from "./pages/Customers";
 import Tasks from "./pages/Tasks";
 import Invoices from "./pages/Invoices";
+import CreateInvoice from "./pages/CreateInvoice";
 import InvoiceSearch from "./pages/InvoiceSearch";
 import Company from "./pages/Company";
 import Status from "./pages/Status";
@@ -12,7 +13,8 @@ const navItems = [
   { to: "/", label: "Overview" },
   { to: "/customers", label: "Add customer" },
   { to: "/tasks", label: "Add task" },
-  { to: "/invoices", label: "Create invoice" },
+  { to: "/invoices", label: "Invoices" },
+  { to: "/create-invoice", label: "Create invoice" },
   { to: "/search", label: "Search invoices" },
   { to: "/company", label: "Company info" },
   { to: "/manage", label: "Manage" },
@@ -68,6 +70,7 @@ function App() {
         <Route path="/customers" element={<Customers />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/invoices" element={<Invoices />} />
+          <Route path="/create-invoice" element={<CreateInvoice />} />
         <Route path="/search" element={<InvoiceSearch />} />
         <Route path="/company" element={<Company />} />
         <Route path="/manage" element={<Manage />} />

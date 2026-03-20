@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import tempfile
 from urllib.parse import quote
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
@@ -40,6 +41,7 @@ from storage_utils import (
 )
 
 app = FastAPI(title="ST_Faktura API", version="1.0")
+logger = logging.getLogger(__name__)
 
 _frontend_dist = Path(__file__).resolve().parent / "frontend" / "dist"
 if _frontend_dist.exists():
@@ -136,6 +138,24 @@ class InvoicePreviewRequest(BaseModel):
 
 class UpdateInvoiceNumberRequest(BaseModel):
     next_invoice_number: int
+
+
+class CreditMemoPreviewRequest(BaseModel):
+    customer_name: str
+    description: str
+    net_amount: float
+    original_invoice_number: Optional[str] = None
+
+
+class CreateCreditMemoRequest(BaseModel):
+    customer_name: str
+    description: str
+    net_amount: float
+    original_invoice_number: Optional[str] = None
+    send_customer: bool = True
+    customer_email_override: Optional[str] = None
+    cc_bookkeeping: bool = True
+    cc_emails: Optional[List[str]] = None
 
 
 class UpdateCompanyDetailsRequest(BaseModel):
@@ -942,6 +962,7 @@ def delete_task(row_index: int) -> Dict[str, Any]:
 @app.post("/invoices")
 def create_invoice(payload: CreateInvoiceRequest) -> Dict[str, Any]:
     client = get_sheets_client()
+    normalized_customer_name = payload.customer_name.strip()
     try:
         bucket, invoiced_blob = _get_invoiced_tasks_blob()
     except Exception as exc:
@@ -953,12 +974,12 @@ def create_invoice(payload: CreateInvoiceRequest) -> Dict[str, Any]:
     invoice_manager = InvoiceManager(client, invoice_number_manager=invoice_number_manager)
 
     customers = invoice_manager.get_customers()
-    customer = next((c for c in customers if c.get("name") == payload.customer_name), None)
+    customer = next((c for c in customers if str(c.get("name", "")).strip() == normalized_customer_name), None)
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
     all_tasks = _load_tasks_sheet(client)
-    tasks = [task for task in all_tasks if str(task.get("customer_name", "")).strip() == payload.customer_name]
+    tasks = [task for task in all_tasks if str(task.get("customer_name", "")).strip() == normalized_customer_name]
     tasks = _filter_tasks_by_date(tasks, payload.start_date, payload.end_date)
 
     if payload.selected_task_ids:
@@ -982,6 +1003,20 @@ def create_invoice(payload: CreateInvoiceRequest) -> Dict[str, Any]:
     if not pdf_path:
         raise HTTPException(status_code=500, detail="Failed to generate invoice PDF")
 
+    # REQUIRED: Upload to Drive first before any emails are sent
+    drive_uploaded = False
+    drive_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "").strip() or None
+    if not drive_folder_id:
+        raise HTTPException(status_code=400, detail="GOOGLE_DRIVE_FOLDER_ID not configured. Invoices require Drive upload.")
+    
+    drive_uploaded = upload_to_drive(pdf_path, folder_id=drive_folder_id)
+    if not drive_uploaded:
+        raise HTTPException(status_code=500, detail="Failed to upload invoice to Google Drive. Invoice not sent.")
+
+    # Record invoice after successful Drive upload
+    _record_invoiced_tasks(bucket, invoiced_blob, tasks, next_number)
+
+    # Only send emails after successful Drive upload and recording
     emailed = False
     if payload.send_email:
         customer_email = str(customer.get("email", "")).strip()
@@ -1003,14 +1038,7 @@ def create_invoice(payload: CreateInvoiceRequest) -> Dict[str, Any]:
         )
         if not emailed:
             detail = getattr(invoice_manager, "last_email_error", None) or "Failed to send invoice email"
-            raise HTTPException(status_code=502, detail=detail)
-
-    drive_uploaded = False
-    drive_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "").strip() or None
-    if drive_folder_id:
-        drive_uploaded = upload_to_drive(pdf_path, folder_id=drive_folder_id)
-
-    _record_invoiced_tasks(bucket, invoiced_blob, tasks, next_number)
+            raise HTTPException(status_code=400, detail=detail)
 
     return {
         "invoice_number": next_number,
@@ -1054,14 +1082,15 @@ def set_invoice_number(payload: UpdateInvoiceNumberRequest) -> Dict[str, Any]:
 def preview_invoice(payload: InvoicePreviewRequest) -> FileResponse:
     client = get_sheets_client()
     invoice_manager = InvoiceManager(client)
+    normalized_customer_name = payload.customer_name.strip()
 
     customers = invoice_manager.get_customers()
-    customer = next((c for c in customers if c.get("name") == payload.customer_name), None)
+    customer = next((c for c in customers if str(c.get("name", "")).strip() == normalized_customer_name), None)
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
     all_tasks = _load_tasks_sheet(client)
-    tasks = [task for task in all_tasks if str(task.get("customer_name", "")).strip() == payload.customer_name]
+    tasks = [task for task in all_tasks if str(task.get("customer_name", "")).strip() == normalized_customer_name]
     tasks = _filter_tasks_by_date(tasks, payload.start_date, payload.end_date)
 
     if payload.selected_task_ids:
@@ -1163,6 +1192,285 @@ def update_company_details(payload: UpdateCompanyDetailsRequest) -> Dict[str, An
     if not ok:
         raise HTTPException(status_code=400, detail="Failed to update company details")
     return {"status": "updated"}
+
+
+def _credit_memo_task(customer_name: str, description: str, net_amount: float) -> Dict[str, Any]:
+    return {
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "customer_name": customer_name,
+        "tasktype": "Kreditnota",
+        "pricing_type": "FixedPrice",
+        "description": description,
+        "time_minutes": "",
+        "price": f"{net_amount:.2f}",
+        "discount_percentage": "0",
+        "sum": f"{net_amount:.2f}",
+    }
+
+
+def _load_credit_memos_gcs() -> List[Dict[str, Any]]:
+    try:
+        bucket = get_env_bucket()
+        prefix = get_env_prefix()
+        blob = f"{prefix}/state/credit_memos.json"
+        data = read_json_from_gcs(bucket, blob, default=[])
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_credit_memos_gcs(data: List[Dict[str, Any]]) -> None:
+    bucket = get_env_bucket()
+    prefix = get_env_prefix()
+    blob = f"{prefix}/state/credit_memos.json"
+    write_json_to_gcs(bucket, blob, data)
+
+
+def _upload_credit_memo_to_drive(file_path: str) -> Tuple[bool, Optional[str], Optional[str]]:
+    """Upload credit memo to Google Drive using the same logic as invoices."""
+    """Upload credit memo to Google Drive using the same folder as invoices."""
+    try:
+        # Use the same GOOGLE_DRIVE_FOLDER_ID as invoices by default
+        drive_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "").strip() or None
+        if not drive_folder_id:
+            logger.warning("GOOGLE_DRIVE_FOLDER_ID not configured for credit memo upload")
+            return False, None, None
+        
+        # Use upload_to_drive with the configured folder, searches for kreditnota subfolder
+        success = upload_to_drive(file_path, folder_name="stfaktura-kreditnota", folder_id=drive_folder_id)
+        # Return success status; we don't have file_id/link with the bool return
+        return success, None, None
+    except Exception as exc:
+        logger.error(f"Credit memo Drive upload failed: {exc}")
+        return False, None, None
+
+
+def _send_credit_memo_email(
+    customer_email: str,
+    pdf_path: str,
+    customer_name: str,
+    invoice_number: int,
+    cc_emails: Optional[List[str]] = None,
+) -> bool:
+    import smtplib
+    from email import encoders as _enc
+    from email.mime.base import MIMEBase
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    sender_email = os.getenv("SENDER_EMAIL", "").strip()
+    sender_password = os.getenv("SENDER_PASSWORD", "").replace(" ", "")
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    if not sender_email or not sender_password:
+        print("SMTP credentials not configured for credit memo email")
+        return False
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = sender_email
+        msg["To"] = customer_email
+        cc_clean = [
+            a.strip() for a in (cc_emails or [])
+            if a.strip() and a.strip().lower() != customer_email.lower()
+        ]
+        if cc_clean:
+            msg["Cc"] = ", ".join(cc_clean)
+        msg["Subject"] = f"Kreditnota #{invoice_number} - ST Digital"
+        body = (
+            f"Kære {customer_name},\n\n"
+            f"Vedhæftet finder du kreditnota #{invoice_number}.\n\n"
+            "Kreditnotaen er udstedt til bogføring.\n\n"
+            "Med venlig hilsen,\nST Digital"
+        )
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        with open(pdf_path, "rb") as f:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(f.read())
+        _enc.encode_base64(part)
+        part.add_header("Content-Disposition", f"attachment; filename=kreditnota_{invoice_number}.pdf")
+        msg.attach(part)
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, [customer_email] + cc_clean, msg.as_string())
+        return True
+    except Exception as exc:
+        print(f"Credit memo email failed: {exc}")
+        return False
+
+
+@app.post("/credit-memos/preview")
+def preview_credit_memo(payload: CreditMemoPreviewRequest) -> FileResponse:
+    client = get_sheets_client()
+    invoice_manager = InvoiceManager(client)
+    normalized = payload.customer_name.strip()
+    customers = invoice_manager.get_customers()
+    customer = next((c for c in customers if str(c.get("name", "")).strip() == normalized), None)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    company_details = invoice_manager.load_company_details()
+    if not company_details:
+        raise HTTPException(status_code=500, detail="Missing company details")
+    bucket = get_env_bucket()
+    prefix = get_env_prefix()
+    number_blob = f"{prefix}/state/invoice_numbering.json"
+    mgr = GCSInvoiceNumberManager(bucket, number_blob)
+    next_number = mgr.peek_next_invoice_number()
+    tasks = [_credit_memo_task(normalized, payload.description, payload.net_amount)]
+    pdf_generator = InvoicePDFGenerator()
+    pdf_path = pdf_generator.generate_invoice_pdf(
+        next_number,
+        company_details,
+        customer,
+        tasks,
+        hourly_rate=0.0,
+        credit_memo=True,
+    )
+    return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
+
+
+@app.post("/credit-memos")
+def create_credit_memo(payload: CreateCreditMemoRequest) -> Dict[str, Any]:
+    client = get_sheets_client()
+    invoice_manager = InvoiceManager(client)
+    normalized = payload.customer_name.strip()
+    customers = invoice_manager.get_customers()
+    customer = next((c for c in customers if str(c.get("name", "")).strip() == normalized), None)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    company_details = invoice_manager.load_company_details()
+    if not company_details:
+        raise HTTPException(status_code=500, detail="Missing company details")
+    bucket = get_env_bucket()
+    prefix = get_env_prefix()
+    number_blob = f"{prefix}/state/invoice_numbering.json"
+    mgr = GCSInvoiceNumberManager(bucket, number_blob)
+    next_number = mgr.get_next_invoice_number()
+    tasks = [_credit_memo_task(normalized, payload.description, payload.net_amount)]
+    pdf_generator = InvoicePDFGenerator()
+    pdf_path = pdf_generator.generate_invoice_pdf(
+        next_number,
+        company_details,
+        customer,
+        tasks,
+        hourly_rate=0.0,
+        credit_memo=True,
+    )
+    if not pdf_path:
+        raise HTTPException(status_code=500, detail="Failed to generate credit memo PDF")
+    
+    # REQUIRED: Upload to Drive before sending any emails
+    drive_ok, drive_file_id, drive_link = _upload_credit_memo_to_drive(pdf_path)
+    if not drive_ok:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to upload credit memo to Google Drive. Credit memo not sent to preserve data integrity."
+        )
+    
+    # Only send emails after successful Drive upload and recording
+    cc_list: List[str] = list(payload.cc_emails or [])
+    if payload.cc_bookkeeping and BOOKKEEPING_EMAIL and BOOKKEEPING_EMAIL not in cc_list:
+        cc_list.append(BOOKKEEPING_EMAIL)
+    customer_email = str(payload.customer_email_override or customer.get("email", "")).strip()
+    emailed_customer = False
+    if payload.send_customer and customer_email:
+        emailed_customer = _send_credit_memo_email(customer_email, pdf_path, normalized, next_number, cc_list)
+    elif payload.cc_bookkeeping and BOOKKEEPING_EMAIL:
+        _send_credit_memo_email(BOOKKEEPING_EMAIL, pdf_path, normalized, next_number)
+    vat = round(payload.net_amount * 0.25, 2)
+    total = round(payload.net_amount + vat, 2)
+    cm_record: Dict[str, Any] = {
+        "credit_memo_number": next_number,
+        "original_invoice_number": payload.original_invoice_number or "",
+        "customer_name": normalized,
+        "customer_email": customer_email,
+        "description": payload.description,
+        "amount_ex_vat": round(payload.net_amount, 2),
+        "vat_amount": vat,
+        "amount_incl_vat": total,
+        "pdf_path": pdf_path,
+        "drive_file_id": drive_file_id,
+        "drive_link": drive_link,
+        "sent_to_customer": emailed_customer,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    existing_cms = _load_credit_memos_gcs()
+    existing_cms.append(cm_record)
+    _save_credit_memos_gcs(existing_cms)
+    return {
+        "credit_memo_number": next_number,
+        "emailed_customer": emailed_customer,
+        "drive_uploaded": drive_ok,
+        "drive_link": drive_link,
+        "total_incl_vat": total,
+    }
+
+
+@app.get("/credit-memos/list")
+def list_credit_memos() -> Dict[str, Any]:
+    return {"credit_memos": _load_credit_memos_gcs()}
+
+
+@app.delete("/credit-memos/{credit_memo_number}")
+def delete_credit_memo(credit_memo_number: int, delete_drive: bool = False) -> Dict[str, Any]:
+    credit_memos = _load_credit_memos_gcs()
+    target = next(
+        (cm for cm in credit_memos if int(cm.get("credit_memo_number", -1)) == credit_memo_number),
+        None,
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Credit memo not found")
+    if delete_drive and target.get("drive_file_id"):
+        try:
+            from google.oauth2 import service_account
+            from googleapiclient.discovery import build as _build
+            keyfile = (
+                os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
+                or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+                or os.getenv("SERVICE_ACCOUNT_FILE")
+                or "service_account.json"
+            )
+            _creds = service_account.Credentials.from_service_account_file(
+                keyfile, scopes=["https://www.googleapis.com/auth/drive.file"]
+            )
+            _ds = _build("drive", "v3", credentials=_creds, cache_discovery=False)
+            _ds.files().delete(fileId=target["drive_file_id"], supportsAllDrives=True).execute()
+        except Exception as exc:
+            print(f"Drive delete failed for credit memo {credit_memo_number}: {exc}")
+    updated_cms = [cm for cm in credit_memos if int(cm.get("credit_memo_number", -1)) != credit_memo_number]
+    _save_credit_memos_gcs(updated_cms)
+    pdf_path = target.get("pdf_path", "")
+    if pdf_path and os.path.exists(pdf_path):
+        try:
+            os.remove(pdf_path)
+        except Exception:
+            pass
+    return {"status": "deleted", "credit_memo_number": credit_memo_number}
+
+
+@app.get("/invoices/list")
+def list_invoices() -> Dict[str, Any]:
+    try:
+        bucket, invoiced_blob = _get_invoiced_tasks_blob()
+    except Exception:
+        return {"invoices": []}
+    invoiced = _load_invoiced_tasks(bucket, invoiced_blob)
+    by_number: Dict[int, Dict[str, Any]] = {}
+    for key, meta in invoiced.items():
+        num = int(meta.get("invoice_number", 0))
+        if num not in by_number:
+            parts = key.split("|")
+            customer = parts[0].strip() if parts else "Unknown"
+            by_number[num] = {
+                "invoice_number": num,
+                "customer_name": customer,
+                "invoice_date": meta.get("date", "")[:10],
+                "total_amount": 0,
+            }
+    invoices = sorted(by_number.values(), key=lambda x: x["invoice_number"], reverse=True)
+    return {"invoices": invoices}
 
 
 @app.get("/{full_path:path}")

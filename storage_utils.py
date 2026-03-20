@@ -28,7 +28,8 @@ def read_json_from_gcs(
         return default or {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
+        # Return any valid JSON (dict or list), not just dict
+        if isinstance(data, (dict, list)):
             return data
     except (json.JSONDecodeError, OSError):
         pass

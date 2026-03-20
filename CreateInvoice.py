@@ -302,7 +302,12 @@ class InvoiceManager:
             smtp_port = int(os.getenv('SMTP_PORT', '587'))
             sender_email = os.getenv('SENDER_EMAIL', '')
             auth_method = os.getenv('EMAIL_AUTH_METHOD', 'password').lower()
-            sender_password = os.getenv('SENDER_PASSWORD', '') if auth_method == 'password' else ''
+            sender_password_raw = os.getenv('SENDER_PASSWORD', '') if auth_method == 'password' else ''
+            if sender_password_raw.startswith('"') and sender_password_raw.endswith('"') and len(sender_password_raw) >= 2:
+                sender_password_raw = sender_password_raw[1:-1]
+            elif sender_password_raw.startswith("'") and sender_password_raw.endswith("'") and len(sender_password_raw) >= 2:
+                sender_password_raw = sender_password_raw[1:-1]
+            sender_password = ''.join(sender_password_raw.split()) if auth_method == 'password' else ''
             
             if not sender_email:
                 self.last_email_error = "SENDER_EMAIL not configured"
@@ -317,6 +322,15 @@ class InvoiceManager:
             if not sender_password:
                 self.last_email_error = "SENDER_PASSWORD missing for password auth"
                 logger.error("SENDER_PASSWORD missing for password auth. Use a Gmail app password.")
+                return False
+
+            # Gmail app passwords are sometimes entered in grouped form (e.g. "abcd efgh ...").
+            sender_password = sender_password.replace(" ", "")
+
+            # Guard against default placeholder values from .env templates.
+            if sender_email.startswith("REPLACE_WITH_") or sender_password.startswith("REPLACE_WITH_"):
+                self.last_email_error = "SMTP credentials are placeholders. Set real SENDER_EMAIL and SENDER_PASSWORD in .env"
+                logger.error(self.last_email_error)
                 return False
             
             # Create message
@@ -726,13 +740,20 @@ def upload_to_drive(
             logger.error(msg.replace('Could not upload', 'ERROR: Could not upload'))
             return False
         elif status == 404 or reason == 'notFound':
-            msg = (
-                f"Shared Drive not found or inaccessible (ID={shared_drive_id}).\n"
-                "- Verify the ID (it's from the URL of the shared drive).\n"
-                "- Ensure the service account has at least Content Manager access."
-            )
+            if shared_drive_id:
+                msg = (
+                    f"Shared Drive not found or inaccessible (ID={shared_drive_id}).\n"
+                    "- Verify the ID (it's from the URL of the shared drive).\n"
+                    "- Ensure the service account has at least Content Manager access."
+                )
+            else:
+                msg = (
+                    f"Drive folder not found or inaccessible (folder_id={folder_id}).\n"
+                    "- Verify GOOGLE_DRIVE_FOLDER_ID is correct.\n"
+                    "- Share that folder with the service account email."
+                )
             print(f"ERROR: {msg}")
-            logger.error(msg.replace('Shared Drive not found', 'ERROR: Shared Drive not found'))
+            logger.error(f"ERROR: {msg}")
             return False
         else:
             logger.error(f"Drive upload failed (HTTP {status}) reason={reason}: {e}")
