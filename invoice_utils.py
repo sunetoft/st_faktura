@@ -218,7 +218,8 @@ class InvoicePDFGenerator:
         customer_details: Dict[str, str],
         tasks: List[Dict[str, str]],
         hourly_rate: float = 500.0,
-        credit_memo: bool = False
+        credit_memo: bool = False,
+        invoice_date_override: Optional[datetime] = None
     ) -> str:
         """
         Generate a PDF invoice matching the ST Digital template
@@ -253,7 +254,7 @@ class InvoicePDFGenerator:
             tasks = formatted_tasks
 
         try:
-            invoice_date = datetime.now()
+            invoice_date = invoice_date_override or datetime.now()
             filename_prefix = 'kreditnota' if credit_memo else 'faktura'
             filename = f"{filename_prefix}_{invoice_number}_{invoice_date.strftime('%Y%m%d')}.pdf"
             filepath = os.path.join(INVOICES_DIR, filename)

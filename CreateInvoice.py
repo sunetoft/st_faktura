@@ -234,7 +234,8 @@ class InvoiceManager:
         customer: Dict[str, str],
         selected_tasks: List[Dict[str, str]],
         hourly_rate: float = 500.0,
-        credit_memo: bool = False
+        credit_memo: bool = False,
+        invoice_date_override: Optional[datetime] = None
     ) -> Optional[str]:
         """
         Generate an invoice PDF
@@ -265,7 +266,8 @@ class InvoiceManager:
                 customer_details=customer,
                 tasks=selected_tasks,
                 hourly_rate=hourly_rate,
-                credit_memo=credit_memo
+                credit_memo=credit_memo,
+                invoice_date_override=invoice_date_override
             )
             
             logger.info(f"Invoice generated: {pdf_path}")

@@ -140,6 +140,11 @@ class UpdateInvoiceNumberRequest(BaseModel):
     next_invoice_number: int
 
 
+class OverrideDateRequest(BaseModel):
+    enabled: bool
+    override_date: Optional[str] = None  # ISO format YYYY-MM-DD
+
+
 class CreditMemoPreviewRequest(BaseModel):
     customer_name: str
     description: str
@@ -999,7 +1004,13 @@ def create_invoice(payload: CreateInvoiceRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=409, detail={"message": "Tasks already invoiced", "items": already})
 
     next_number = invoice_number_manager.peek_next_invoice_number()
-    pdf_path = invoice_manager.generate_invoice(customer, tasks, hourly_rate=customer.get("hourly_rate", 500.0))
+    override_date = _get_effective_invoice_date()
+    pdf_path = invoice_manager.generate_invoice(
+        customer,
+        tasks,
+        hourly_rate=customer.get("hourly_rate", 500.0),
+        invoice_date_override=override_date,
+    )
     if not pdf_path:
         raise HTTPException(status_code=500, detail="Failed to generate invoice PDF")
 
@@ -1078,6 +1089,55 @@ def set_invoice_number(payload: UpdateInvoiceNumberRequest) -> Dict[str, Any]:
     }
 
 
+def _get_override_date() -> Dict[str, Any]:
+    """Read override date state from storage."""
+    bucket = get_env_bucket()
+    prefix = get_env_prefix()
+    blob = f"{prefix}/state/override_date.json"
+    data = read_json_from_gcs(bucket, blob, default={})
+    return {
+        "enabled": bool(data.get("enabled", False)),
+        "override_date": data.get("override_date") or None,
+    }
+
+
+def _save_override_date(enabled: bool, override_date: Optional[str]) -> None:
+    """Persist override date state to storage."""
+    bucket = get_env_bucket()
+    prefix = get_env_prefix()
+    blob = f"{prefix}/state/override_date.json"
+    write_json_to_gcs(bucket, blob, {"enabled": enabled, "override_date": override_date})
+
+
+def _get_effective_invoice_date() -> Optional[datetime]:
+    """Return override date as datetime if enabled and valid, else None (meaning use today)."""
+    state = _get_override_date()
+    if not state["enabled"] or not state["override_date"]:
+        return None
+    try:
+        return datetime.strptime(state["override_date"], "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+
+
+@app.get("/override-date")
+def get_override_date() -> Dict[str, Any]:
+    return _get_override_date()
+
+
+@app.put("/override-date")
+def set_override_date(payload: OverrideDateRequest) -> Dict[str, Any]:
+    if payload.enabled and not payload.override_date:
+        raise HTTPException(status_code=400, detail="override_date is required when enabled is true")
+    if payload.enabled:
+        try:
+            datetime.strptime(payload.override_date or "", "%Y-%m-%d")
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="override_date must be a valid date in YYYY-MM-DD format")
+    _save_override_date(payload.enabled, payload.override_date if payload.enabled else None)
+    return _get_override_date()
+
+
 @app.post("/invoices/preview")
 def preview_invoice(payload: InvoicePreviewRequest) -> FileResponse:
     client = get_sheets_client()
@@ -1127,6 +1187,7 @@ def preview_invoice(payload: InvoicePreviewRequest) -> FileResponse:
         customer,
         tasks,
         hourly_rate=customer.get("hourly_rate", 500.0),
+        invoice_date_override=_get_effective_invoice_date(),
     )
     return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
 
@@ -1327,6 +1388,7 @@ def preview_credit_memo(payload: CreditMemoPreviewRequest) -> FileResponse:
         tasks,
         hourly_rate=0.0,
         credit_memo=True,
+        invoice_date_override=_get_effective_invoice_date(),
     )
     return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
 
@@ -1357,6 +1419,7 @@ def create_credit_memo(payload: CreateCreditMemoRequest) -> Dict[str, Any]:
         tasks,
         hourly_rate=0.0,
         credit_memo=True,
+        invoice_date_override=_get_effective_invoice_date(),
     )
     if not pdf_path:
         raise HTTPException(status_code=500, detail="Failed to generate credit memo PDF")
