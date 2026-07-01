@@ -80,10 +80,18 @@ logs/
 .history/
 invoices/*.pdf
 
+# Old scanned invoice PDFs (31MB+ of binary data)
+Fakturaer/
+
+# Runtime state / generated data
+data/
+
 st_faktura.git
 
 # Secrets / credentials (ensure not committed)
 service_account.json
 *service_account*.json
 gmail_token.json
+gmail_credentials.json
+*credentials*.json
 credentials.json
