@@ -1707,7 +1707,7 @@ def _invoice_pdf_total(invoice_number: int) -> Optional[float]:
         text = "\n".join((page.extract_text() or "") for page in PdfReader(path).pages)
     except Exception:
         return None
-    match = re.search(r"Samlet pris\s*\n?\s*([\d\.,\-]+)", text)
+    match = re.search(r"Samlet pris\s*\n?\s*(?:DKK\s*)?([\d\.,\-]+)", text)
     if not match:
         return None
     total = _parse_float_value(match.group(1))

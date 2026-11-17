@@ -62,9 +62,13 @@ def parse_amount(value, default: float = 0.0) -> float:
         return default
 
 
-def format_dkk(value: float) -> str:
-    """Danish-style amount: comma decimal, no thousands separator."""
-    return f"{value:.2f}".replace(".", ",")
+def format_dkk(value: float, with_currency: bool = False) -> str:
+    """Danish-style amount: comma decimal, no thousands separator.
+
+    ``with_currency`` prefixes "DKK " (used on the invoice total line).
+    """
+    amount = f"{value:.2f}".replace(".", ",")
+    return f"DKK {amount}" if with_currency else amount
 
 
 class InvoiceNumberManager:
@@ -437,10 +441,10 @@ class InvoicePDFGenerator:
         total = subtotal + moms
         if any_discount:
             data.append(['', '', '', '', 'Moms (25%)', format_dkk(moms)])
-            data.append(['', '', '', '', 'Samlet pris', format_dkk(total)])
+            data.append(['', '', '', '', 'Samlet pris', format_dkk(total, with_currency=True)])
         else:
             data.append(['', '', '', 'Moms (25%)', format_dkk(moms)])
-            data.append(['', '', '', 'Samlet pris', format_dkk(total)])
+            data.append(['', '', '', 'Samlet pris', format_dkk(total, with_currency=True)])
 
         # Column width proportions originally based on 18cm total; adjust if discount column removed
         if any_discount:

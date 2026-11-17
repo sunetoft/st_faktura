@@ -18,7 +18,8 @@ Cloud Run deploy script (alternate path): `./deploy.sh`, optional env
 numbers arrive as strings like `"187,5"`. `float("187,5")` raises and silently zeroes
 the subtotal/VAT/total (this produced invoice 836 with `Samlet pris 0,00`).
 Always use `invoice_utils.parse_amount()` (also `api._parse_float_value`) and format
-output with `invoice_utils.format_dkk()`.
+output with `invoice_utils.format_dkk()`. The total line prints currency:
+`format_dkk(total, with_currency=True)` → `"DKK 234,38"` (since 17.11.2026).
 
 ## API surface (see `GET /capabilities`)
 
