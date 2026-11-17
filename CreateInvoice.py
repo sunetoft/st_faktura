@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 
 from google_sheets_client import GoogleSheetsClient, SheetsConfig, extract_spreadsheet_id
-from invoice_utils import InvoiceNumberManager, InvoicePDFGenerator
+from invoice_utils import InvoiceNumberManager, InvoicePDFGenerator, parse_amount
 
 # Load environment variables
 load_dotenv()
@@ -895,10 +895,7 @@ def main() -> None:
             # Derived monetary summary from selected tasks' sum column
             subtotal_preview = 0.0
             for t in selected_tasks:
-                try:
-                    subtotal_preview += float(t.get('sum','0') or 0)
-                except ValueError:
-                    pass
+                subtotal_preview += parse_amount(t.get('sum','0'))
             vat_preview = subtotal_preview * 0.25
             total_preview = subtotal_preview + vat_preview
             print(f"Subtotal (from task sums): {subtotal_preview:.2f} DKK")

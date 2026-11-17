@@ -41,16 +41,25 @@ function formatDate(value) {
   });
 }
 
+function creditMemoPayload(doc) {
+  const net = Math.abs(
+    Number(doc?.net_amount ?? doc?.amount_ex_vat ?? doc?.total_sum ?? 0) || 0,
+  );
+  return {
+    customer_name: doc?.customer_name || "",
+    description: `Kreditnota vedr. faktura ${doc?.document_number ?? ""}`.trim(),
+    net_amount: net,
+    original_invoice_number: String(doc?.document_number ?? ""),
+  };
+}
+
 export default function Invoices() {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [warning, setWarning] = useState("");
-  const [apiCapabilities, setApiCapabilities] = useState({
-    creditMemoListPath: "",
-    creditMemoDeletePath: "",
-    invoiceDeletePath: "",
-  });
+  const [capabilities, setCapabilities] = useState([]);
+  const [capabilitiesError, setCapabilitiesError] = useState("");
   const [filterCustomer, setFilterCustomer] = useState("");
   const [filterStart, setFilterStart] = useState("");
   const [filterEnd, setFilterEnd] = useState("");
@@ -73,10 +82,31 @@ export default function Invoices() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState("");
 
+  const loadCapabilities = async () => {
+    try {
+      const data = await apiRequest("/capabilities");
+      const ops = data?.operations || {};
+      setCapabilities(
+        Object.entries(ops).map(([key, op]) => ({
+          key,
+          label: op?.label || key,
+          method: op?.method || "GET",
+          path: op?.path || "",
+          query: op?.query || "",
+        })),
+      );
+      setCapabilitiesError("");
+    } catch (err) {
+      setCapabilities([]);
+      setCapabilitiesError(err?.message || "Capability probe failed.");
+    }
+  };
+
   const loadInvoices = async () => {
     setLoading(true);
     setError("");
     setWarning("");
+    loadCapabilities();
     try {
       const invoiceData = await apiRequest("/invoices/list");
       const invoiceRows = (Array.isArray(invoiceData?.invoices) ? invoiceData.invoices : []).map((item) => ({
@@ -96,7 +126,6 @@ export default function Invoices() {
           "/credit_memos",
         ]);
         const creditData = creditResult.data;
-        setApiCapabilities((prev) => ({ ...prev, creditMemoListPath: creditResult.path }));
         const rawCreditMemos = Array.isArray(creditData?.credit_memos)
           ? creditData.credit_memos
           : Array.isArray(creditData?.creditMemos)
@@ -179,8 +208,8 @@ export default function Invoices() {
         return ((a?.document_number || 0) - (b?.document_number || 0)) * factor;
       }
       if (sortBy === "total_amount") {
-        const amountA = Number(a?.total_sum ?? a?.amount_incl_vat ?? 0);
-        const amountB = Number(b?.total_sum ?? b?.amount_incl_vat ?? 0);
+        const amountA = Number(a?.total_amount ?? a?.amount_incl_vat ?? 0);
+        const amountB = Number(b?.total_amount ?? b?.amount_incl_vat ?? 0);
         const delta = amountA - amountB;
         if (delta !== 0) return delta * factor;
         return ((a?.document_number || 0) - (b?.document_number || 0)) * factor;
@@ -237,9 +266,10 @@ export default function Invoices() {
         URL.revokeObjectURL(previewUrl);
         setPreviewUrl("");
       }
-      const response = await fetch(`${apiBase()}/invoices/${invoice.invoice_number}/credit-memo/preview`, {
+      const response = await fetch(`${apiBase()}/credit-memos/preview`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(creditMemoPayload(invoice)),
       });
       if (!response.ok) {
         const contentType = response.headers.get("content-type") || "";
@@ -289,25 +319,13 @@ export default function Invoices() {
     setDeleteError("");
     try {
       if (deleteTarget.type === "credit_memo") {
-        const result = await tryApiPaths(
-          [
-            `/credit-memos/${deleteTarget.document_number}?delete_drive=true`,
-            `/credit_memos/${deleteTarget.document_number}?delete_drive=true`,
-            `/credit-memos/${deleteTarget.document_number}`,
-            `/credit_memos/${deleteTarget.document_number}`,
-          ],
-          { method: "DELETE" }
-        );
-        setApiCapabilities((prev) => ({ ...prev, creditMemoDeletePath: result.path }));
+        await apiRequest(`/credit-memos/${deleteTarget.document_number}?delete_drive=true`, {
+          method: "DELETE",
+        });
       } else {
-        const result = await tryApiPaths(
-          [
-            `/invoices/${deleteTarget.document_number}?delete_drive=true`,
-            `/invoices/${deleteTarget.document_number}`,
-          ],
-          { method: "DELETE" }
-        );
-        setApiCapabilities((prev) => ({ ...prev, invoiceDeletePath: result.path }));
+        await apiRequest(`/invoices/${deleteTarget.document_number}?delete_drive=true`, {
+          method: "DELETE",
+        });
       }
       closeDelete();
       await loadInvoices();
@@ -325,11 +343,12 @@ export default function Invoices() {
     setSendLoading(true);
     setSendError("");
     try {
-      await apiRequest(`/invoices/${activeInvoice.invoice_number}/credit-memo`, {
+      await apiRequest("/credit-memos", {
         method: "POST",
         body: JSON.stringify({
+          ...creditMemoPayload(activeInvoice),
           send_customer: sendCustomer,
-          send_expense: sendExpense,
+          cc_bookkeeping: sendExpense,
         }),
       });
       closePreview();
@@ -351,9 +370,24 @@ export default function Invoices() {
       {warning ? <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{warning}</div> : null}
       <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-xs text-sky-900">
         <p className="font-semibold">API capability status</p>
-        <p>Credit memo list endpoint: {apiCapabilities.creditMemoListPath || "not detected yet"}</p>
-        <p>Credit memo delete endpoint: {apiCapabilities.creditMemoDeletePath || "not detected yet"}</p>
-        <p>Invoice delete endpoint: {apiCapabilities.invoiceDeletePath || "not detected yet"}</p>
+        {capabilitiesError ? (
+          <p className="mt-1 text-amber-800">⚠ Capability probe failed: {capabilitiesError}</p>
+        ) : capabilities.length === 0 ? (
+          <p className="mt-1 text-ink/60">Checking endpoints…</p>
+        ) : (
+          <ul className="mt-2 grid gap-1 sm:grid-cols-2">
+            {capabilities.map((op) => (
+              <li key={op.key} className="flex items-baseline gap-2">
+                <span aria-hidden="true">✅</span>
+                <span className="font-medium">{op.label}</span>
+                <code className="rounded bg-white/70 px-1 py-0.5 text-[11px] text-ink/80">
+                  {op.method} {op.path}
+                  {op.query ? `?${op.query}` : ""}
+                </code>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-ink">Document list</h2>
@@ -420,7 +454,13 @@ export default function Invoices() {
                   <td className="px-4 py-3 text-ink/80">{doc.customer_name || "Unknown"}</td>
                   <td className="px-4 py-3 font-semibold text-ink">{doc.document_number}</td>
                   <td className="px-4 py-3 text-ink/70">{formatDate(doc.document_date)}</td>
-                  <td className="px-4 py-3 text-ink/80">{formatCurrency(doc.total_sum || doc.amount_incl_vat || 0)}</td>
+                  <td className="px-4 py-3 text-ink/80">
+                    {formatCurrency(
+                      doc.type === "credit_memo"
+                        ? -Math.abs(Number(doc.total_amount ?? doc.amount_incl_vat ?? 0))
+                        : Number(doc.total_amount ?? doc.amount_incl_vat ?? 0),
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-2">
                       {doc.type !== "credit_memo" ? (

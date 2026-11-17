@@ -29,6 +29,44 @@ INVOICE_NUMBERING_FILE = os.path.join(os.getcwd(), 'invoice_numbering.json')
 INVOICES_DIR = os.path.join(os.getcwd(), 'invoices')
 
 
+def parse_amount(value, default: float = 0.0) -> float:
+    """Parse a monetary value that may arrive Danish-formatted from Google Sheets.
+
+    Google Sheets' values API returns FORMATTED_VALUE, so a cell holding the number
+    187.5 comes back as "187,5" under the da-DK locale (and may carry non-breaking
+    or thin spaces as thousands separators). ``float("187,5")`` raises ValueError,
+    which used to be swallowed and silently zeroed the invoice subtotal/VAT/total.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    for junk in ("\u00a0", "\u202f", "\u2007", " "):
+        text = text.replace(junk, "")
+    if not text:
+        return default
+    if "," in text and "." in text:
+        # 1.234,56 (DK/EU) vs 1,234.56 (US)
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    else:
+        text = text.replace(",", ".")
+    try:
+        return float(text)
+    except ValueError:
+        return default
+
+
+def format_dkk(value: float) -> str:
+    """Danish-style amount: comma decimal, no thousands separator."""
+    return f"{value:.2f}".replace(".", ",")
+
+
 class InvoiceNumberManager:
     """
     Manages invoice numbering following clean architecture principles
@@ -239,17 +277,11 @@ class InvoicePDFGenerator:
         if credit_memo:
             formatted_tasks: List[Dict[str, str]] = []
             for t in tasks:
-                try:
-                    inv_sum = -float(t.get('sum', 0))
-                except:
-                    inv_sum = 0.0
-                try:
-                    inv_price = -float(t.get('price', 0))
-                except:
-                    inv_price = 0.0
+                inv_sum = -parse_amount(t.get('sum', 0))
+                inv_price = -parse_amount(t.get('price', 0))
                 new_task = dict(t)
-                new_task['sum'] = f"{inv_sum:.2f}"
-                new_task['price'] = f"{inv_price:.2f}"
+                new_task['sum'] = format_dkk(inv_sum)
+                new_task['price'] = format_dkk(inv_price)
                 formatted_tasks.append(new_task)
             tasks = formatted_tasks
 
@@ -372,12 +404,7 @@ class InvoicePDFGenerator:
         for t in tasks:
             d_raw = str(t.get('discount_percentage', '')).strip()
             if d_raw and d_raw not in ('0', '0.0', '0.00'):
-                try:
-                    if float(d_raw) != 0.0:
-                        any_discount = True
-                        break
-                except ValueError:
-                    # If non-numeric but present, consider it a discount marker
+                if parse_amount(d_raw) != 0.0:
                     any_discount = True
                     break
 
@@ -398,10 +425,7 @@ class InvoicePDFGenerator:
             price = t.get('price','0')
             discount = t.get('discount_percentage','0')
             line_sum = t.get('sum','0')
-            try:
-                subtotal += float(line_sum) if line_sum else 0.0
-            except ValueError:
-                pass
+            subtotal += parse_amount(line_sum)
             if any_discount:
                 row = [tasktype, desc_para, time_min, price, discount, line_sum]
             else:
@@ -412,11 +436,11 @@ class InvoicePDFGenerator:
         moms = subtotal * 0.25
         total = subtotal + moms
         if any_discount:
-            data.append(['', '', '', '', 'Moms (25%)', f"{moms:.2f}"])
-            data.append(['', '', '', '', 'Samlet pris', f"{total:.2f}"])
+            data.append(['', '', '', '', 'Moms (25%)', format_dkk(moms)])
+            data.append(['', '', '', '', 'Samlet pris', format_dkk(total)])
         else:
-            data.append(['', '', '', 'Moms (25%)', f"{moms:.2f}"])
-            data.append(['', '', '', 'Samlet pris', f"{total:.2f}"])
+            data.append(['', '', '', 'Moms (25%)', format_dkk(moms)])
+            data.append(['', '', '', 'Samlet pris', format_dkk(total)])
 
         # Column width proportions originally based on 18cm total; adjust if discount column removed
         if any_discount:

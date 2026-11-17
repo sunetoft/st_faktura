@@ -423,11 +423,24 @@ def _search_pdf_text(pdf_path: str, pattern: re.Pattern) -> List[Dict[str, Any]]
 
 
 def _parse_float_value(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
+    """Comma-tolerant float parse — sheet values arrive DK-formatted ("187,5")."""
+    if value is None:
+        return default
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
-    except (TypeError, ValueError):
+    text = str(value).strip().replace("\u00a0", "").replace("\u202f", "").replace(" ", "")
+    if not text:
+        return default
+    if "," in text and "." in text:
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    else:
+        text = text.replace(",", ".")
+    try:
+        return float(text)
+    except ValueError:
         return default
 
 
@@ -649,6 +662,48 @@ def favicon() -> Dict[str, str]:
 @app.get("/api/health")
 def api_health() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/capabilities")
+def api_capabilities() -> Dict[str, Any]:
+    """Advertise what this build can actually do, so the UI never has to guess."""
+    return {
+        "version": os.getenv("VERSION", "1.0.0"),
+        "operations": {
+            "invoice_list": {
+                "label": "Invoice list",
+                "method": "GET",
+                "path": "/invoices/list",
+            },
+            "invoice_delete": {
+                "label": "Invoice delete",
+                "method": "DELETE",
+                "path": "/invoices/{invoice_number}",
+                "query": "delete_drive, delete_pdf",
+            },
+            "credit_memo_list": {
+                "label": "Credit memo list",
+                "method": "GET",
+                "path": "/credit-memos/list",
+            },
+            "credit_memo_preview": {
+                "label": "Credit memo preview",
+                "method": "POST",
+                "path": "/credit-memos/preview",
+            },
+            "credit_memo_create": {
+                "label": "Credit memo create",
+                "method": "POST",
+                "path": "/credit-memos",
+            },
+            "credit_memo_delete": {
+                "label": "Credit memo delete",
+                "method": "DELETE",
+                "path": "/credit-memos/{credit_memo_number}",
+                "query": "delete_drive",
+            },
+        },
+    }
 
 
 @app.get("/customers")
@@ -1471,6 +1526,54 @@ def create_credit_memo(payload: CreateCreditMemoRequest) -> Dict[str, Any]:
     }
 
 
+@app.delete("/invoices/{invoice_number}")
+def delete_invoice(invoice_number: int, delete_drive: bool = False, delete_pdf: bool = False) -> Dict[str, Any]:
+    """Remove an invoice from the app state (and optionally Drive/archive).
+
+    The state file is the app's record of which tasks were invoiced. Deleting the
+    invoice releases those tasks so they can be re-invoiced.
+    """
+    try:
+        bucket, invoiced_blob = _get_invoiced_tasks_blob()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"GCS not configured for invoiced tasks: {exc}") from exc
+
+    invoiced = _load_invoiced_tasks(bucket, invoiced_blob)
+    matching = [
+        key for key, meta in invoiced.items()
+        if int(_parse_int_value(meta.get("invoice_number"), 0)) == invoice_number
+    ]
+    if not matching:
+        raise HTTPException(status_code=404, detail=f"Invoice {invoice_number} not found in invoiced state")
+
+    _remove_invoiced_task_keys_gcs(bucket, invoiced_blob, matching)
+
+    pdf_deleted = False
+    pdf_path = _invoice_pdf_path(invoice_number)
+    if delete_pdf and pdf_path and os.path.exists(pdf_path):
+        try:
+            os.remove(pdf_path)
+            pdf_deleted = True
+        except OSError as exc:
+            logger.warning("Could not delete local invoice PDF %s: %s", pdf_path, exc)
+
+    drive_deleted = False
+    if delete_drive:
+        drive_deleted = _delete_invoice_from_drive(invoice_number)
+
+    logger.info(
+        "Deleted invoice %s: released %d task(s), drive=%s, pdf=%s",
+        invoice_number, len(matching), drive_deleted, pdf_deleted,
+    )
+    return {
+        "status": "deleted",
+        "invoice_number": invoice_number,
+        "released_tasks": len(matching),
+        "drive_deleted": drive_deleted,
+        "pdf_deleted": pdf_deleted,
+    }
+
+
 @app.get("/credit-memos/list")
 def list_credit_memos() -> Dict[str, Any]:
     return {"credit_memos": _load_credit_memos_gcs()}
@@ -1513,6 +1616,105 @@ def delete_credit_memo(credit_memo_number: int, delete_drive: bool = False) -> D
     return {"status": "deleted", "credit_memo_number": credit_memo_number}
 
 
+_PDF_TOTAL_CACHE: Dict[str, Tuple[float, float]] = {}
+
+
+def _invoice_pdf_search_dirs() -> List[str]:
+    return [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "invoices"),
+        os.getenv("INVOICES_DIR", "/opt/st_faktura/Fakturaer"),
+    ]
+
+
+def _invoice_pdf_path(invoice_number: int) -> Optional[str]:
+    """Newest archived PDF for an invoice number, or None."""
+    name_pattern = re.compile(rf"^faktura_{invoice_number:03d}_\d{{8}}\.pdf$")
+    best: Optional[Tuple[float, str]] = None
+    for directory in _invoice_pdf_search_dirs():
+        if not directory or not os.path.isdir(directory):
+            continue
+        for filename in os.listdir(directory):
+            if not name_pattern.match(filename):
+                continue
+            path = os.path.join(directory, filename)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if best is None or mtime > best[0]:
+                best = (mtime, path)
+    return best[1] if best else None
+
+
+def _delete_invoice_from_drive(invoice_number: int) -> bool:
+    """Trash the invoice PDF(s) in the Drive archive folder. Never raises."""
+    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "").strip()
+    if not folder_id:
+        return False
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build as _build
+
+        keyfile = (
+            os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
+            or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            or os.getenv("SERVICE_ACCOUNT_FILE")
+            or "service_account.json"
+        )
+        creds = service_account.Credentials.from_service_account_file(
+            keyfile, scopes=["https://www.googleapis.com/auth/drive.file"]
+        )
+        drive = _build("drive", "v3", credentials=creds, cache_discovery=False)
+        query = (
+            f"'{folder_id}' in parents and trashed=false and "
+            f"name contains 'faktura_{invoice_number:03d}_'"
+        )
+        files = drive.files().list(
+            q=query, fields="files(id,name)", supportsAllDrives=True, includeItemsFromAllDrives=True
+        ).execute().get("files", [])
+        pattern = re.compile(rf"^faktura_{invoice_number:03d}_\d{{8}}\.pdf$")
+        deleted_any = False
+        for item in files:
+            if not pattern.match(item.get("name", "")):
+                continue
+            drive.files().update(
+                fileId=item["id"], body={"trashed": True}, supportsAllDrives=True
+            ).execute()
+            deleted_any = True
+        return deleted_any
+    except Exception as exc:
+        logger.warning("Drive delete failed for invoice %s: %s", invoice_number, exc)
+        return False
+
+
+def _invoice_pdf_total(invoice_number: int) -> Optional[float]:
+    """Total incl. VAT as printed on the issued PDF — the document is ground truth.
+
+    ``invoiced_tasks.json`` has known mapping drift (tasks split across the wrong
+    invoice numbers), so a PDF hit always wins over the state-file estimate.
+    """
+    path = _invoice_pdf_path(invoice_number)
+    if not path:
+        return None
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    cached = _PDF_TOTAL_CACHE.get(path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        text = "\n".join((page.extract_text() or "") for page in PdfReader(path).pages)
+    except Exception:
+        return None
+    match = re.search(r"Samlet pris\s*\n?\s*([\d\.,\-]+)", text)
+    if not match:
+        return None
+    total = _parse_float_value(match.group(1))
+    _PDF_TOTAL_CACHE[path] = (mtime, total)
+    return total
+
+
 @app.get("/invoices/list")
 def list_invoices() -> Dict[str, Any]:
     try:
@@ -1522,7 +1724,9 @@ def list_invoices() -> Dict[str, Any]:
     invoiced = _load_invoiced_tasks(bucket, invoiced_blob)
     by_number: Dict[int, Dict[str, Any]] = {}
     for key, meta in invoiced.items():
-        num = int(meta.get("invoice_number", 0))
+        num = int(_parse_int_value(meta.get("invoice_number"), 0))
+        if num <= 0:
+            continue
         if num not in by_number:
             parts = key.split("|")
             customer = parts[0].strip() if parts else "Unknown"
@@ -1530,8 +1734,32 @@ def list_invoices() -> Dict[str, Any]:
                 "invoice_number": num,
                 "customer_name": customer,
                 "invoice_date": meta.get("date", "")[:10],
-                "total_amount": 0,
+                "invoiced_at": meta.get("date", ""),
+                "net_amount": 0.0,
+                "vat_amount": 0.0,
+                "total_amount": 0.0,
             }
+        # Task key's last field is the net line sum (excl. VAT).
+        parts = key.split("|")
+        if len(parts) >= 9:
+            by_number[num]["net_amount"] += _parse_float_value(parts[8])
+    for row in by_number.values():
+        net = round(row["net_amount"], 2)
+        vat = round(net * 0.25, 2)
+        pdf_total = _invoice_pdf_total(row["invoice_number"])
+        if pdf_total is not None:
+            row["total_amount"] = round(pdf_total, 2)
+            row["vat_amount"] = round(pdf_total - pdf_total / 1.25, 2)
+            row["net_amount"] = round(pdf_total / 1.25, 2)
+            row["total_source"] = "pdf"
+        else:
+            row["net_amount"] = net
+            row["vat_amount"] = vat
+            row["total_amount"] = round(net + vat, 2)
+            row["total_source"] = "state"
+        # Legacy field names still read by older frontend builds
+        row["total_sum"] = row["net_amount"]
+        row["amount_incl_vat"] = row["total_amount"]
     invoices = sorted(by_number.values(), key=lambda x: x["invoice_number"], reverse=True)
     return {"invoices": invoices}
 
