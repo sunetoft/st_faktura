@@ -354,6 +354,17 @@ class InvoicePDFGenerator:
         # Attempt to load logo.gif; if not present fallback to text brand
         logo_path = os.path.join(os.getcwd(), 'logo.gif')
         brand_block_flowables = []
+        # Text fallback needs its own style: an inline <font size='20'> inside the
+        # InvoiceInfo style keeps the row height at that style's ~11pt leading, so the
+        # date/number row was drawn on top of the brand text.
+        brand_text_style = ParagraphStyle(
+            'BrandText',
+            parent=self.styles['InvoiceInfo'],
+            fontName='Helvetica-Bold',
+            fontSize=20,
+            leading=24,
+            alignment=TA_RIGHT,
+        )
         if os.path.exists(logo_path):
             try:
                 img = Image(logo_path)
@@ -364,10 +375,13 @@ class InvoicePDFGenerator:
                 brand_block_flowables.append(img)
             except Exception:
                 logo_text = company_details.get('company_name', 'ST Digital')
-                brand_block_flowables.append(Paragraph(f"<font size='20'><b>{logo_text}</b></font>", self.styles['CompanyDetails']))
+                brand_block_flowables.append(Paragraph(f"<b>{logo_text}</b>", brand_text_style))
         else:
             logo_text = company_details.get('company_name', 'ST Digital')
-            brand_block_flowables.append(Paragraph(f"<font size='20'><b>{logo_text}</b></font>", self.styles['CompanyDetails']))
+            brand_block_flowables.append(Paragraph(f"<b>{logo_text}</b>", brand_text_style))
+
+        # Keep the meta block clear of the logo/brand instead of butting against it
+        brand_block_flowables.append(Spacer(1, 8))
 
         # Add meta info (date + number)
         date_label = 'Kreditnotadato' if credit_memo else 'Fakturadato'
