@@ -42,3 +42,6 @@ must stay declared before the SPA catch-all route `/{full_path:path}`.
 
 `tools`: `python3 regen_invoice_pdf.py <n> [--date YYYY-MM-DD]` regenerates one PDF
 from the live sheet without consuming an invoice number.
+`python3 replace_drive_invoice_pdf.py <n>` overwrites the Drive copy **in place**
+(same `fileId`, same name, revision kept) and verifies by re-downloading the md5 —
+use this instead of re-uploading, which always creates a duplicate name in the folder.
