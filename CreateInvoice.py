@@ -50,6 +50,7 @@ COMPANY_DETAILS_SHEET_RANGE = "Company Details!A2:L2"  # Single company details 
 # Company details file
 COMPANY_DETAILS_FILE = os.path.join(os.getcwd(), 'st-faktura.json')
 INVOICED_TASKS_FILE = os.path.join(os.getcwd(), 'invoiced_tasks.json')
+CREDIT_MEMOS_FILE = os.path.join(os.getcwd(), 'credit_memos.json')
 BOOKKEEPING_EMAIL = os.getenv('BOOKKEEPING_EMAIL', '341bilag2401129@e-conomic.dk')
 
 
@@ -275,7 +276,8 @@ class InvoiceManager:
         pdf_path: str,
         customer_name: str,
         invoice_number: int,
-        cc_emails: Optional[List[str]] = None
+        cc_emails: Optional[List[str]] = None,
+        credit_memo: bool = False
     ) -> bool:
         """
         Send invoice via email
@@ -334,15 +336,16 @@ class InvoiceManager:
             if cc_emails_clean:
                 msg['Cc'] = ", ".join(cc_emails_clean)
             # Updated branding: use 'ST Digital'
-            msg['Subject'] = f"Faktura #{invoice_number} - ST Digital"
+            document_name = "Kreditnota" if credit_memo else "Faktura"
+            msg['Subject'] = f"{document_name} #{invoice_number} - ST Digital"
             
             # Email body
             body = f"""
 Kære {customer_name},
 
-Vedhæftet finder du faktura #{invoice_number}.
+Vedhæftet finder du {document_name.lower()} #{invoice_number}.
 
-Betalingsfristen er 8 dage fra fakturadato.
+{"Betalingsfristen er 8 dage fra fakturadato." if not credit_memo else "Kreditnotaen er udstedt til bogføring."}
 
 Med venlig hilsen,
 ST_Faktura
@@ -358,7 +361,7 @@ ST_Faktura
             encoders.encode_base64(part)
             part.add_header(
                 'Content-Disposition',
-                f'attachment; filename= faktura_{invoice_number}.pdf'
+                f"attachment; filename= {'kreditnota' if credit_memo else 'faktura'}_{invoice_number}.pdf"
             )
             msg.attach(part)
             
@@ -641,7 +644,62 @@ def record_invoiced_tasks(tasks: List[Dict[str, str]], invoice_number: int) -> N
     _save_invoiced_tasks(invoiced)
     logger.info(f"Recorded {len(tasks)} tasks as invoiced (invoice #{invoice_number})")
 
-def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
+
+def _load_credit_memos() -> List[Dict[str, object]]:
+    try:
+        if os.path.exists(CREDIT_MEMOS_FILE):
+            with open(CREDIT_MEMOS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        return []
+    except Exception as e:
+        logger.warning(f"Failed to load credit memos file: {e}")
+        return []
+
+
+def _save_credit_memos(data: List[Dict[str, object]]) -> None:
+    try:
+        with open(CREDIT_MEMOS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save credit memos file: {e}")
+
+
+def record_credit_memo(
+    credit_memo_number: int,
+    original_invoice_number: str,
+    customer: Dict[str, str],
+    reason: str,
+    amount_ex_vat: float,
+    vat_amount: float,
+    amount_incl_vat: float,
+    pdf_path: str,
+    drive_file_id: Optional[str],
+    drive_link: Optional[str],
+    sent_to_customer: bool
+) -> None:
+    data = _load_credit_memos()
+    data.append({
+        'credit_memo_number': credit_memo_number,
+        'original_invoice_number': original_invoice_number,
+        'customer_name': customer.get('name', ''),
+        'customer_email': customer.get('email', ''),
+        'reason': reason,
+        'amount_ex_vat': round(amount_ex_vat, 2),
+        'vat_amount': round(vat_amount, 2),
+        'amount_incl_vat': round(amount_incl_vat, 2),
+        'pdf_path': pdf_path,
+        'drive_file_id': drive_file_id,
+        'drive_link': drive_link,
+        'drive_uploaded_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'sent_to_customer': sent_to_customer,
+        'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    })
+    _save_credit_memos(data)
+    logger.info(f"Recorded credit memo #{credit_memo_number} for invoice #{original_invoice_number}")
+
+def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> Tuple[bool, Optional[str], Optional[str]]:
     """Upload a file to Google Drive or a Shared Drive folder.
 
     Shared Drive handling:
@@ -695,13 +753,16 @@ def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
 
         file_meta = {'name': os.path.basename(file_path), 'parents': [folder_id]}
         media = MediaFileUpload(file_path, mimetype='application/pdf')
-        drive_service.files().create(
+        created = drive_service.files().create(
             body=file_meta,
             media_body=media,
-            fields='id',
+            fields='id, webViewLink',
             supportsAllDrives=bool(shared_drive_id)
         ).execute()
+        file_id = created.get('id')
+        web_link = created.get('webViewLink')
         logger.info(f"Uploaded '{os.path.basename(file_path)}' to folder '{folder_name}' ({'Shared Drive' if shared_drive_id else 'My Drive'})")
+        return True, file_id, web_link
 
     except HttpError as e:
         status = getattr(e, 'resp', {}).status if hasattr(e, 'resp') else 'unknown'
@@ -719,6 +780,7 @@ def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
             )
             print(f"ERROR: {msg}")
             logger.error(msg.replace('Could not upload', 'ERROR: Could not upload'))
+            return False, None, None
         elif status == 404 or reason == 'notFound':
             msg = (
                 f"Shared Drive not found or inaccessible (ID={shared_drive_id}).\n"
@@ -727,16 +789,87 @@ def upload_to_drive(file_path: str, folder_name: str = 'stfaktura') -> None:
             )
             print(f"ERROR: {msg}")
             logger.error(msg.replace('Shared Drive not found', 'ERROR: Shared Drive not found'))
+            return False, None, None
         else:
             logger.error(f"Drive upload failed (HTTP {status}) reason={reason}: {e}")
+            return False, None, None
     except Exception as e:
         logger.error(f"Failed to upload to Drive: {e}")
+        return False, None, None
 
 
 def Credit_memo() -> bool:
     """Prompt user whether to generate a Credit Memo instead of a standard Invoice."""
     choice = input("Generate a Credit Memo instead of an Invoice? (y/N): ").strip().lower()
     return choice == 'y'
+
+
+def prompt_credit_memo_details(customer_name: str) -> Optional[Dict[str, object]]:
+    """Collect details for a bookkeeping credit memo without touching tasks."""
+    original_invoice_number = input("Original invoice number to credit (required): ").strip()
+    if not original_invoice_number:
+        print("❌ Original invoice number is required for traceability.")
+        return None
+
+    mode = ''
+    while mode not in ('1', '2'):
+        print("\nCredit memo mode:")
+        print(" 1. Full refund")
+        print(" 2. Partial refund")
+        mode = input("Choose 1 or 2: ").strip()
+
+    amount_incl_vat = 0.0
+    while amount_incl_vat <= 0:
+        prompt = "Enter FULL amount incl. VAT (DKK): " if mode == '1' else "Enter PARTIAL amount incl. VAT (DKK): "
+        raw_amount = input(prompt).strip().replace(',', '.')
+        try:
+            amount_incl_vat = float(raw_amount)
+            if amount_incl_vat <= 0:
+                print("❌ Amount must be greater than 0.")
+        except ValueError:
+            print("❌ Invalid amount. Use format like 1250.00")
+
+    default_reason = f"Kreditering af faktura #{original_invoice_number}"
+    reason = input(f"Reason text [{default_reason}]: ").strip() or default_reason
+
+    amount_ex_vat = round(amount_incl_vat / 1.25, 2)
+    vat_amount = round(amount_incl_vat - amount_ex_vat, 2)
+    description = f"{reason} (opr. faktura #{original_invoice_number})"
+
+    # Reuse existing PDF table schema using one synthetic line item.
+    credit_task = {
+        'date': datetime.now().strftime('%Y-%m-%d'),
+        'customer_name': customer_name,
+        'tasktype': 'Kreditnota',
+        'pricing_type': 'FixedPrice',
+        'description': description,
+        'time_minutes': '',
+        'price': f"{amount_ex_vat:.2f}",
+        'discount_percentage': '0',
+        'sum': f"{amount_ex_vat:.2f}"
+    }
+
+    print("\n" + "=" * 60)
+    print("CREDIT MEMO SUMMARY")
+    print("=" * 60)
+    print(f"Customer:          {customer_name}")
+    print(f"Original invoice:  #{original_invoice_number}")
+    print(f"Mode:              {'Full refund' if mode == '1' else 'Partial refund'}")
+    print(f"Reason:            {reason}")
+    print(f"Subtotal (ex VAT): {amount_ex_vat:.2f} DKK")
+    print(f"VAT (25%):         {vat_amount:.2f} DKK")
+    print(f"Total credit:      {amount_incl_vat:.2f} DKK")
+    print("=" * 60)
+
+    return {
+        'original_invoice_number': original_invoice_number,
+        'mode': 'full' if mode == '1' else 'partial',
+        'reason': reason,
+        'amount_ex_vat': amount_ex_vat,
+        'vat_amount': vat_amount,
+        'amount_incl_vat': amount_incl_vat,
+        'tasks': [credit_task],
+    }
     
 
 def main() -> None:
@@ -781,6 +914,122 @@ def main() -> None:
 
         if not selected_customer:
             print("\n⏭️ Invoice creation cancelled.")
+            return
+
+        if credit_memo:
+            print(f"\nStep 2: Enter Credit Memo Details for {selected_customer['name']}")
+            credit_details = prompt_credit_memo_details(selected_customer['name'])
+            if not credit_details:
+                print("\n⏭️ Credit memo creation cancelled.")
+                return
+
+            if args.yes:
+                confirm_credit = 'y'
+                print("\n--yes supplied: proceeding without interactive confirmation.")
+            else:
+                confirm_credit = input("\nGenerate this credit memo? (y/N): ").strip().lower()
+
+            if confirm_credit != 'y':
+                print("\n⏭️ Credit memo creation cancelled.")
+                return
+
+            print("\nStep 3: Generating Credit Memo...")
+            pdf_path = invoice_manager.generate_invoice(
+                selected_customer,
+                credit_details['tasks'],
+                hourly_rate=0.0,
+                credit_memo=True
+            )
+            if not pdf_path:
+                print("❌ Failed to generate credit memo PDF")
+                sys.exit(1)
+
+            print(f"✅ Credit memo PDF generated: {pdf_path}")
+            uploaded, drive_file_id, drive_link = upload_to_drive(pdf_path, folder_name='stfaktura-kreditnota')
+            if not uploaded:
+                print("❌ Credit memo created locally, but Google Drive upload failed.")
+                print("   Credit memos must be saved to Drive for bookkeeping, so the operation was aborted.")
+                sys.exit(1)
+            link_msg = f" (link: {drive_link})" if drive_link else ""
+            print(f"✅ Credit memo uploaded to Google Drive folder 'stfaktura-kreditnota'{link_msg}")
+
+            import re
+            match_credit = re.search(r'_(\d+)_', os.path.basename(pdf_path))
+            credit_number = int(match_credit.group(1)) if match_credit else 0
+
+            sent_to_customer = False
+            cc_list_credit: List[str] = []
+            if selected_customer['email']:
+                if args.yes:
+                    send_credit_email = 'y'
+                    print(f"\n--yes supplied: auto-sending to {selected_customer['email']}")
+                else:
+                    send_credit_email = input(f"\nSend credit memo to {selected_customer['email']}? (y/N): ").strip().lower()
+
+                if send_credit_email == 'y':
+                    if args.yes:
+                        cc_input = ''
+                    else:
+                        cc_input = input("Enter additional CC email(s) (comma separated) or press Enter to skip: ").strip()
+                    if cc_input:
+                        for raw in cc_input.split(','):
+                            addr = raw.strip()
+                            if addr and '@' in addr and addr not in cc_list_credit:
+                                cc_list_credit.append(addr)
+                    sent_to_customer = invoice_manager.send_invoice_email(
+                        selected_customer['email'],
+                        pdf_path,
+                        selected_customer['name'],
+                        credit_number,
+                        cc_emails=cc_list_credit if cc_list_credit else None,
+                        credit_memo=True
+                    )
+                    if sent_to_customer:
+                        target_msg = selected_customer['email'] + (f" (CC: {', '.join(cc_list_credit)})" if cc_list_credit else "")
+                        print(f"✅ Credit memo sent to {target_msg}")
+                    else:
+                        print("❌ Failed to send credit memo email")
+
+            try:
+                if BOOKKEEPING_EMAIL:
+                    skip_bookkeeping = any(c.lower() == BOOKKEEPING_EMAIL.lower() for c in cc_list_credit)
+                    copy_choice = 'n'
+                    if not skip_bookkeeping:
+                        if args.yes:
+                            copy_choice = 'y'
+                            print(f"\n--yes supplied: auto-sending bookkeeping copy to {BOOKKEEPING_EMAIL}")
+                        else:
+                            copy_choice = input(f"\nSend a copy to bookkeeping ({BOOKKEEPING_EMAIL})? (y/N): ").strip().lower()
+                    if copy_choice == 'y':
+                        if invoice_manager.send_invoice_email(
+                            BOOKKEEPING_EMAIL,
+                            pdf_path,
+                            selected_customer['name'],
+                            credit_number,
+                            credit_memo=True
+                        ):
+                            print(f"✅ Credit memo copy sent to {BOOKKEEPING_EMAIL}")
+                        else:
+                            print(f"❌ Failed to send copy to {BOOKKEEPING_EMAIL}")
+            except Exception as e:
+                logger.error(f"Error sending credit memo bookkeeping copy: {e}")
+
+            record_credit_memo(
+                credit_memo_number=credit_number,
+                original_invoice_number=str(credit_details['original_invoice_number']),
+                customer=selected_customer,
+                reason=str(credit_details['reason']),
+                amount_ex_vat=float(credit_details['amount_ex_vat']),
+                vat_amount=float(credit_details['vat_amount']),
+                amount_incl_vat=float(credit_details['amount_incl_vat']),
+                pdf_path=pdf_path,
+                drive_file_id=drive_file_id,
+                drive_link=drive_link,
+                sent_to_customer=sent_to_customer
+            )
+
+            print("\n🎉 Credit memo creation completed successfully!")
+            logger.info(f"Credit memo creation completed for customer: {selected_customer['name']}")
             return
 
         # Step 2: Select tasks
@@ -919,8 +1168,8 @@ def main() -> None:
         pdf_path = invoice_manager.generate_invoice(
             selected_customer,
             selected_tasks,
-            hourly_rate * (-1 if credit_memo else 1),
-            credit_memo=credit_memo
+            hourly_rate,
+            credit_memo=False
         )
         
         if not pdf_path:
@@ -928,11 +1177,21 @@ def main() -> None:
             sys.exit(1)
         
         print(f"✅ Invoice PDF generated: {pdf_path}")
-        # Save a copy to Google Drive
-        upload_to_drive(pdf_path)
+        # Save a copy to Google Drive. Credit memos require successful Drive upload.
+        drive_folder = 'stfaktura-kreditnota' if credit_memo else 'stfaktura'
+        uploaded, drive_file_id, drive_link = upload_to_drive(pdf_path, folder_name=drive_folder)
+        if uploaded:
+            link_msg = f" (link: {drive_link})" if drive_link else ""
+            print(f"✅ PDF uploaded to Google Drive folder '{drive_folder}'{link_msg}")
+        elif credit_memo:
+            print("❌ Credit memo created locally, but Google Drive upload failed.")
+            print("   Credit memos must be saved to Drive for bookkeeping, so the operation was aborted.")
+            sys.exit(1)
+        else:
+            print("⚠️ Invoice PDF upload to Google Drive failed (continuing).")
         # Extract invoice number to record tasks
         import re
-        match = re.search(r'faktura_(\d+)_', pdf_path)
+        match = re.search(r'_(\d+)_', os.path.basename(pdf_path))
         generated_invoice_number = int(match.group(1)) if match else None
         if generated_invoice_number is not None:
             record_invoiced_tasks(selected_tasks, generated_invoice_number)
@@ -948,7 +1207,7 @@ def main() -> None:
             if send_email == 'y':
                 # Extract invoice number from filename or use the one we just generated
                 import re
-                match = re.search(r'faktura_(\d+)_', pdf_path)
+                match = re.search(r'_(\d+)_', os.path.basename(pdf_path))
                 current_invoice_number = int(match.group(1)) if match else 785
                 
                 # Optional CC prompt (single or comma separated)
@@ -968,7 +1227,8 @@ def main() -> None:
                     pdf_path,
                     selected_customer['name'],
                     current_invoice_number,
-                    cc_emails=cc_list if cc_list else None
+                    cc_emails=cc_list if cc_list else None,
+                    credit_memo=False
                 ):
                     target_msg = selected_customer['email'] + (f" (CC: {', '.join(cc_list)})" if cc_list else "")
                     print(f"✅ Invoice sent to {target_msg}")
@@ -999,13 +1259,14 @@ def main() -> None:
                     # reuse invoice number gathered above
                     if 'generated_invoice_number' not in locals() or generated_invoice_number is None:
                         import re
-                        match_copy = re.search(r'faktura_(\d+)_', pdf_path)
+                        match_copy = re.search(r'_(\d+)_', os.path.basename(pdf_path))
                         generated_invoice_number = int(match_copy.group(1)) if match_copy else 0
                     if invoice_manager.send_invoice_email(
                         BOOKKEEPING_EMAIL,
                         pdf_path,
                         selected_customer['name'],
-                        generated_invoice_number
+                        generated_invoice_number,
+                        credit_memo=False
                     ):
                         print(f"✅ Copy sent to {BOOKKEEPING_EMAIL}")
                     else:
